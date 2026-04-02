@@ -112,6 +112,8 @@ async def import_hanseaticbank(file: UploadFile = File(...)):
 
 # ─── Transactions ──────────────────────────────────────────────────────────────
 
+ALLOWED_SORT_COLS = {"date", "merchant_name", "category", "amount"}
+
 @app.get("/api/transactions")
 def list_transactions(
     page: int = Query(1, ge=1),
@@ -120,7 +122,14 @@ def list_transactions(
     source: str = Query(None),
     month: str = Query(None),
     search: str = Query(None),
+    sort: str = Query("date"),
+    dir: str = Query("desc"),
 ):
+    sort_col = sort if sort in ALLOWED_SORT_COLS else "date"
+    sort_dir = "ASC" if dir == "asc" else "DESC"
+    # Secondary sort for stability
+    order = f"{sort_col} {sort_dir}, id DESC"
+
     conn = get_db()
     conditions = []
     params = []
@@ -143,7 +152,7 @@ def list_transactions(
 
     total = conn.execute(f"SELECT COUNT(*) FROM transactions {where}", params).fetchone()[0]
     rows = conn.execute(
-        f"SELECT * FROM transactions {where} ORDER BY date DESC, id DESC LIMIT ? OFFSET ?",
+        f"SELECT * FROM transactions {where} ORDER BY {order} LIMIT ? OFFSET ?",
         params + [page_size, offset]
     ).fetchall()
 

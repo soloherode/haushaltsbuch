@@ -365,6 +365,13 @@ tr:hover td { background: rgba(0,82,255,.025); }
 .yr th:first-child, .yr td:first-child { text-align: left; }
 .yr tfoot tr { font-weight: 700; border-top: 2px solid var(--border); }
 
+/* ── Sortable headers ── */
+th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+th.sortable:hover { color: var(--text); background: var(--bord2); }
+th.sortable::after { content: '↕'; margin-left: 5px; opacity: .3; font-size: 10px; }
+th.sortable.asc::after  { content: '↑'; opacity: .8; color: var(--lime); }
+th.sortable.desc::after { content: '↓'; opacity: .8; color: var(--lime); }
+
 /* ── Budget items ── */
 .budget-item { display:flex; align-items:center; gap:16px; flex-wrap:wrap; }
 .budget-item-name { flex:0 0 170px; font-weight:600; }
@@ -667,6 +674,7 @@ tr:hover td { background: rgba(0,82,255,.025); }
       <span id="batch-count">0 ausgewählt</span>
       <select id="batch-cat"></select>
       <button onclick="applyBatch()" style="padding:7px 16px">Kategorie setzen</button>
+      <button class="danger" onclick="deleteBatch()" style="padding:7px 14px">Löschen</button>
       <button class="sec" onclick="clearSel()" style="padding:7px 14px;margin-left:auto">Abbrechen</button>
     </div>
 
@@ -675,11 +683,11 @@ tr:hover td { background: rgba(0,82,255,.025); }
         <table>
           <thead><tr>
             <th style="width:32px"><input type="checkbox" id="sel-all" onchange="toggleAll(this)"></th>
-            <th>Datum</th>
-            <th>Händler / Beschreibung</th>
-            <th>Kategorie</th>
+            <th class="sortable" data-col="date" onclick="setSort('date')">Datum</th>
+            <th class="sortable" data-col="merchant_name" onclick="setSort('merchant_name')">Händler / Beschreibung</th>
+            <th class="sortable" data-col="category" onclick="setSort('category')">Kategorie</th>
             <th>Konto</th>
-            <th style="text-align:right">Betrag</th>
+            <th class="sortable" data-col="amount" onclick="setSort('amount')" style="text-align:right">Betrag</th>
             <th style="width:70px"></th>
           </tr></thead>
           <tbody id="tx-body"></tbody>
@@ -974,6 +982,7 @@ tr:hover td { background: rgba(0,82,255,.025); }
 <script>
 // ── State ──────────────────────────────────────────────────────────────────────
 let txPage_ = 1, txPages_ = 1;
+let txSort_ = 'date', txDir_ = 'desc';
 let categories = [], months = [];
 let selectedIds = new Set();
 
@@ -1433,16 +1442,31 @@ function renderMonthly(monthly) {
 }
 
 // ── Transactions ───────────────────────────────────────────────────────────────
+function setSort(col) {
+  if (txSort_ === col) txDir_ = txDir_ === 'asc' ? 'desc' : 'asc';
+  else { txSort_ = col; txDir_ = col === 'amount' ? 'asc' : 'desc'; }
+  txPage_ = 1;
+  loadTx();
+}
+
+function updateSortHeaders() {
+  document.querySelectorAll('th.sortable').forEach(th => {
+    th.classList.remove('asc','desc');
+    if (th.dataset.col === txSort_) th.classList.add(txDir_);
+  });
+}
+
 async function loadTx() {
   const month  = document.getElementById('tx-month').value;
   const cat    = document.getElementById('tx-cat').value;
   const src    = document.getElementById('tx-src').value;
   const search = document.getElementById('tx-search').value;
-  let url = `/api/transactions?page=${txPage_}&page_size=50`;
+  let url = `/api/transactions?page=${txPage_}&page_size=50&sort=${txSort_}&dir=${txDir_}`;
   if (month)  url+=`&month=${encodeURIComponent(month)}`;
   if (cat)    url+=`&category=${encodeURIComponent(cat)}`;
   if (src)    url+=`&source=${encodeURIComponent(src)}`;
   if (search) url+=`&search=${encodeURIComponent(search)}`;
+  updateSortHeaders();
 
   const data = await api(url);
   txPages_ = Math.ceil(data.total/data.page_size)||1;
@@ -1491,6 +1515,12 @@ async function applyBatch() {
   const cat = document.getElementById('batch-cat').value;
   if (!cat||!selectedIds.size) return;
   await api('/api/transactions/batch-category',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids:[...selectedIds],category:cat})});
+  clearSel(); loadTx();
+}
+async function deleteBatch() {
+  if (!selectedIds.size) return;
+  if (!confirm(`${selectedIds.size} Einträge löschen?`)) return;
+  await Promise.all([...selectedIds].map(id => fetch(`/api/transactions/${id}`,{method:'DELETE'})));
   clearSel(); loadTx();
 }
 function exportCsv() {
