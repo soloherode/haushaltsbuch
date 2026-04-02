@@ -1,6 +1,6 @@
 services:
   haushaltsbuch:
-    build: .
+    image: ghcr.io/soloherode/haushaltsbuch:latest
     container_name: haushaltsbuch
     restart: unless-stopped
     ports:
