@@ -270,12 +270,32 @@ tr:hover td { background: rgba(255,255,255,.02); }
 .full { margin-bottom: 24px; }
 .chart-tall { height: 240px; position: relative; }
 
+/* ── Bottom nav (mobile) ── */
+.bottom-nav {
+  display: none;
+  position: fixed; bottom: 0; left: 0; right: 0;
+  background: var(--bg2); border-top: 1px solid var(--border);
+  z-index: 100;
+  padding: 6px 0 calc(6px + env(safe-area-inset-bottom));
+}
+.bottom-nav a {
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+  flex: 1; padding: 6px 4px;
+  color: var(--text2); text-decoration: none; font-size: 10px; font-weight: 500;
+  border: none; background: none; transition: color .15s;
+}
+.bottom-nav a .bn-icon { font-size: 20px; }
+.bottom-nav a.active { color: var(--lime); }
+
 @media (max-width: 960px) {
   .shell { grid-template-columns: 1fr; }
   nav { display: none; }
-  main { padding: 20px; }
+  .bottom-nav { display: flex; }
+  main { padding: 16px 16px calc(80px + env(safe-area-inset-bottom)); }
   .kpi-row, .charts-grid, .import-grid, .form-grid { grid-template-columns: 1fr; }
   .sq-hero { flex-direction: column; gap: 20px; }
+  .sankey-mobile-hide { display: none; }
+  .sankey-mobile-table { display: block; }
 }
 </style>
 </head>
@@ -299,6 +319,15 @@ tr:hover td { background: rgba(255,255,255,.02); }
 
   <div class="nav-spacer"></div>
   <button class="nav-theme" onclick="toggleTheme()"><span id="theme-icon">☀️</span><span id="theme-lbl">Hell</span></button>
+</nav>
+
+<!-- ── BOTTOM NAV (mobile) ──────────────────────────────────────────────── -->
+<nav class="bottom-nav" id="bottom-nav">
+  <a href="#" class="active" data-page="dashboard"><span class="bn-icon">📊</span>Dashboard</a>
+  <a href="#" data-page="transactions"><span class="bn-icon">📋</span>Buchungen</a>
+  <a href="#" data-page="stats"><span class="bn-icon">📈</span>Statistiken</a>
+  <a href="#" data-page="rules"><span class="bn-icon">🏷️</span>Regeln</a>
+  <a href="#" data-page="import"><span class="bn-icon">⬆️</span>Import</a>
 </nav>
 
 <!-- ── MAIN ─────────────────────────────────────────────────────────────── -->
@@ -363,9 +392,19 @@ tr:hover td { background: rgba(255,255,255,.02); }
     </div>
 
     <!-- Sankey -->
-    <div class="sankey-card full">
+    <div class="sankey-card full sankey-mobile-hide">
       <div class="card-label">Cashflow — Wohin fließt dein Geld?</div>
       <div id="sankey-wrap"><svg id="sankey-svg" height="360"></svg></div>
+    </div>
+    <!-- Sankey-Ersatz auf Mobile -->
+    <div class="card full sankey-mobile-table" style="display:none">
+      <div class="card-label">Cashflow — Wohin fließt dein Geld?</div>
+      <div class="table-wrap" style="margin-top:12px">
+        <table id="sankey-table">
+          <thead><tr><th>Kategorie</th><th style="text-align:right">Betrag</th><th style="text-align:right">Anteil</th></tr></thead>
+          <tbody id="sankey-table-body"></tbody>
+        </table>
+      </div>
     </div>
 
     <!-- Charts -->
@@ -702,17 +741,20 @@ function toggleTheme() {
 setTheme(localStorage.getItem('theme') || 'dark');
 
 // ── Nav ────────────────────────────────────────────────────────────────────────
-document.querySelectorAll('nav a').forEach(a => a.addEventListener('click', e => {
-  e.preventDefault();
-  document.querySelectorAll('nav a').forEach(x => x.classList.remove('active'));
+function navigate(page) {
+  document.querySelectorAll('nav a, .bottom-nav a').forEach(x => x.classList.remove('active'));
   document.querySelectorAll('.page').forEach(x => x.classList.remove('active'));
-  a.classList.add('active');
-  document.getElementById('page-' + a.dataset.page).classList.add('active');
-  if (a.dataset.page === 'dashboard')    loadDashboard();
-  if (a.dataset.page === 'transactions') loadTx();
-  if (a.dataset.page === 'stats')        loadStats();
-  if (a.dataset.page === 'rules')        { loadCats(); loadRules(); }
-  if (a.dataset.page === 'import')       loadSuspicious();
+  document.querySelectorAll(`[data-page="${page}"]`).forEach(x => x.classList.add('active'));
+  document.getElementById('page-' + page).classList.add('active');
+  if (page === 'dashboard')    loadDashboard();
+  if (page === 'transactions') loadTx();
+  if (page === 'stats')        loadStats();
+  if (page === 'rules')        { loadCats(); loadRules(); }
+  if (page === 'import')       loadSuspicious();
+}
+document.querySelectorAll('nav a, .bottom-nav a').forEach(a => a.addEventListener('click', e => {
+  e.preventDefault();
+  navigate(a.dataset.page);
 }));
 
 // ── Tabs ────────────────────────────────────────────────────────────────────────
@@ -869,6 +911,16 @@ function renderSankey(summary, catData, incData) {
     const idx = nodes.length;
     nodes.push({name:'Verbleibend', type:'savings'});
     links.push({source:midIdx, target:idx, value:summary.balance});
+  }
+
+  // Mobile table
+  const tbody = document.getElementById('sankey-table-body');
+  if (tbody) {
+    const total = validExp.reduce((s,c)=>s+Math.abs(c.total),0);
+    tbody.innerHTML = validExp.map(c => {
+      const pct = total>0?((Math.abs(c.total)/total)*100).toFixed(1):'0';
+      return `<tr><td>${esc(c.category)}</td><td class="amount-neg" style="text-align:right">${fmt(Math.abs(c.total))}</td><td style="text-align:right;color:var(--text3)">${pct} %</td></tr>`;
+    }).join('') + (summary.balance>0?`<tr style="border-top:1px solid var(--border)"><td style="color:var(--teal);font-weight:600">Verbleibend</td><td class="amount-pos" style="text-align:right">${fmt(summary.balance)}</td><td style="text-align:right;color:var(--text3)">${total>0?((summary.balance/summary.income)*100).toFixed(1):0} %</td></tr>`:'');
   }
 
   if (!links.length) {
