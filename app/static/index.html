@@ -270,6 +270,26 @@ tr:hover td { background: rgba(255,255,255,.02); }
 .full { margin-bottom: 24px; }
 .chart-tall { height: 240px; position: relative; }
 
+/* ── Modal ── */
+.modal-backdrop {
+  display: none; position: fixed; inset: 0; z-index: 300;
+  background: rgba(0,0,0,.7); backdrop-filter: blur(4px);
+  align-items: center; justify-content: center; padding: 20px;
+}
+.modal-backdrop.open { display: flex; }
+.modal {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--r2); padding: 28px; width: 100%; max-width: 480px;
+  box-shadow: 0 24px 64px rgba(0,0,0,.6);
+  animation: modal-in .18s ease;
+}
+@keyframes modal-in { from { opacity:0; transform:translateY(12px); } to { opacity:1; transform:none; } }
+.modal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }
+.modal-header h2 { font-size: 18px; font-weight: 700; }
+.modal-close { background: none; border: none; color: var(--text2); font-size: 20px; cursor: pointer; padding: 0; line-height: 1; }
+.modal-close:hover { color: var(--text); }
+.modal-footer { display: flex; gap: 10px; justify-content: flex-end; margin-top: 24px; }
+
 /* ── Mobile header & burger menu ── */
 .mobile-header {
   display: none;
@@ -358,6 +378,7 @@ tr:hover td { background: rgba(255,255,255,.02); }
 
     <div class="toolbar">
       <select id="dash-month"></select>
+      <button onclick="openEntryModal()" style="margin-left:auto">+ Eintrag</button>
     </div>
 
     <!-- KPIs -->
@@ -715,6 +736,43 @@ tr:hover td { background: rgba(255,255,255,.02); }
 </main>
 </div>
 
+<!-- ── MODAL ─────────────────────────────────────────────────────────────── -->
+<div class="modal-backdrop" id="entry-modal" onclick="handleBackdropClick(event)">
+  <div class="modal">
+    <div class="modal-header">
+      <h2>Neuer Eintrag</h2>
+      <button class="modal-close" onclick="closeEntryModal()">✕</button>
+    </div>
+    <div class="form-grid">
+      <div class="fg">
+        <label>Datum</label>
+        <input type="date" id="modal-date">
+      </div>
+      <div class="fg">
+        <label>Betrag (negativ = Ausgabe)</label>
+        <input type="number" id="modal-amt" placeholder="-49.90" step="0.01">
+      </div>
+      <div class="fg" style="grid-column:1/-1">
+        <label>Beschreibung / Händler</label>
+        <input type="text" id="modal-desc" placeholder="z.B. Supermarkt">
+      </div>
+      <div class="fg">
+        <label>Kategorie</label>
+        <select id="modal-cat"></select>
+      </div>
+      <div class="fg">
+        <label>Konto</label>
+        <input type="text" id="modal-acc" value="Manuell">
+      </div>
+    </div>
+    <div class="msg" id="msg-modal"></div>
+    <div class="modal-footer">
+      <button class="sec" onclick="closeEntryModal()">Abbrechen</button>
+      <button onclick="submitModal()">Speichern</button>
+    </div>
+  </div>
+</div>
+
 <script>
 // ── State ──────────────────────────────────────────────────────────────────────
 let txPage_ = 1, txPages_ = 1;
@@ -755,6 +813,44 @@ function toggleTheme() {
   localStorage.setItem('theme', next); setTheme(next);
 }
 setTheme(localStorage.getItem('theme') || 'dark');
+
+// ── Entry Modal ────────────────────────────────────────────────────────────────
+function openEntryModal() {
+  document.getElementById('modal-date').value = new Date().toISOString().slice(0,10);
+  document.getElementById('modal-amt').value = '';
+  document.getElementById('modal-desc').value = '';
+  document.getElementById('msg-modal').style.display = 'none';
+  // populate cat select if empty
+  const sel = document.getElementById('modal-cat');
+  if (!sel.options.length) {
+    categories.forEach(c => { const o=document.createElement('option'); o.value=c; o.textContent=c; sel.appendChild(o); });
+  }
+  document.getElementById('entry-modal').classList.add('open');
+  setTimeout(() => document.getElementById('modal-amt').focus(), 50);
+}
+function closeEntryModal() {
+  document.getElementById('entry-modal').classList.remove('open');
+}
+function handleBackdropClick(e) {
+  if (e.target === document.getElementById('entry-modal')) closeEntryModal();
+}
+async function submitModal() {
+  const date    = document.getElementById('modal-date').value;
+  const amount  = parseFloat(document.getElementById('modal-amt').value);
+  const desc    = document.getElementById('modal-desc').value.trim();
+  const cat     = document.getElementById('modal-cat').value;
+  const account = document.getElementById('modal-acc').value.trim() || 'Manuell';
+  const msg     = document.getElementById('msg-modal');
+  if (!date || isNaN(amount) || !desc) {
+    showMsg(msg, 'err', '✗ Datum, Betrag und Beschreibung erforderlich'); return;
+  }
+  try {
+    const d = await api('/api/transactions', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({date, amount, description:desc, category:cat, account_name:account})});
+    showMsg(msg, 'ok', `✓ Gespeichert`);
+    await refreshMonths();
+    setTimeout(() => { closeEntryModal(); loadDashboard(); }, 800);
+  } catch(e) { showMsg(msg, 'err', '✗ '+e.message); }
+}
 
 // ── Nav ────────────────────────────────────────────────────────────────────────
 function toggleMenu() {
@@ -1282,7 +1378,7 @@ async function deleteCat(name) {
   } catch(e) { showMsg(msg,'err','✗ '+e.message); }
 }
 function refreshCatSelects() {
-  ['tx-cat','tl-cat','m-cat','rule-cat','batch-cat'].forEach(id=>{
+  ['tx-cat','tl-cat','m-cat','rule-cat','batch-cat','modal-cat'].forEach(id=>{
     const sel=document.getElementById(id); if (!sel) return;
     const cur=sel.value, withAll=id==='tx-cat'||id==='tl-cat';
     sel.innerHTML=withAll?'<option value="">Alle Kategorien</option>':'';
