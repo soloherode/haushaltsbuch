@@ -697,6 +697,29 @@ def budget_status(month: str = Query(None)):
     return {"month": month, "categories": result}
 
 
+# ─── Settings ─────────────────────────────────────────────────────────────────
+
+@app.get("/api/settings/{key}")
+def get_setting(key: str):
+    conn = get_db()
+    row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    conn.close()
+    return {"value": row["value"] if row else None}
+
+
+@app.put("/api/settings/{key}")
+def set_setting(key: str, body: dict):
+    value = str(body.get("value", ""))
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (key, value)
+    )
+    conn.commit()
+    conn.close()
+    return {"ok": True}
+
+
 # ─── Import suggestions ────────────────────────────────────────────────────────
 
 @app.get("/api/import/suggestions")

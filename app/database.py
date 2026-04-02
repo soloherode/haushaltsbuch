@@ -80,6 +80,11 @@ def init_db():
             count         INTEGER NOT NULL DEFAULT 1,
             PRIMARY KEY (merchant_name, category)
         );
+
+        CREATE TABLE IF NOT EXISTS settings (
+            key   TEXT PRIMARY KEY,
+            value TEXT
+        );
     """)
     conn.commit()
 

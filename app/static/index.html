@@ -158,8 +158,15 @@ button.danger:hover { background: rgba(255,77,106,.25); }
 .sq-sub { font-size: 12px; color: var(--text3); margin-top: 6px; }
 .sq-right { flex: 1; }
 .sq-bar-labels { display: flex; justify-content: space-between; font-size: 11px; color: var(--text2); margin-bottom: 6px; }
-.sq-track { height: 8px; background: var(--sur3); border-radius: 4px; overflow: hidden; }
+.sq-track { height: 8px; background: var(--sur3); border-radius: 4px; position: relative; }
 .sq-fill  { height: 100%; border-radius: 4px; transition: width .6s cubic-bezier(.4,0,.2,1); }
+.sq-goal-marker {
+  position: absolute; top: -6px; width: 2px; height: 20px;
+  background: rgba(255,255,255,.7); border-radius: 1px;
+  box-shadow: 0 0 8px rgba(255,255,255,.5);
+  transform: translateX(-50%); transition: left .6s cubic-bezier(.4,0,.2,1);
+}
+.sq-goal-achieved { box-shadow: 0 0 60px rgba(200,245,74,.18) !important; border-color: rgba(200,245,74,.45) !important; }
 
 /* ── Budget bar ── */
 .budget-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r2); padding: 22px 26px; margin-bottom: 24px; }
@@ -417,17 +424,24 @@ tr:hover td { background: rgba(255,255,255,.02); }
     </div>
 
     <!-- Sparquote -->
-    <div class="sq-hero">
+    <div class="sq-hero" id="sq-hero">
       <div class="sq-left">
         <div class="sq-label">Sparquote</div>
         <div class="sq-pct" id="sq-pct">—</div>
         <div class="sq-sub" id="sq-sub">—</div>
       </div>
       <div class="sq-right">
-        <div class="sq-bar-labels">
-          <span>0 %</span><span id="sq-mid">—</span><span>100 %</span>
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:6px">
+          <div class="sq-bar-labels" style="flex:1;display:flex;justify-content:space-between;margin:0">
+            <span>0 %</span><span id="sq-mid">—</span><span>100 %</span>
+          </div>
+          <button class="sec" id="sq-goal-btn" onclick="editSavingsGoal()" style="padding:4px 12px;font-size:11px;white-space:nowrap;flex-shrink:0">Ziel setzen</button>
         </div>
-        <div class="sq-track"><div class="sq-fill" id="sq-bar" style="width:0%"></div></div>
+        <div class="sq-track">
+          <div class="sq-fill" id="sq-bar" style="width:0%"></div>
+          <div class="sq-goal-marker" id="sq-goal-marker" style="display:none"></div>
+        </div>
+        <div id="sq-goal-status" style="font-size:12px;min-height:18px;margin-top:8px"></div>
       </div>
     </div>
 
@@ -989,11 +1003,12 @@ async function init() {
 async function loadDashboard() {
   const month = document.getElementById('dash-month').value;
   const q = month ? `?month=${month}` : '';
-  const [summary, catData, incData, monthly] = await Promise.all([
+  const [summary, catData, incData, monthly, goalData] = await Promise.all([
     api('/api/stats/summary'+q),
     api('/api/stats/categories'+q),
     api('/api/stats/categories'+(q?q+'&type=income':'?type=income')),
     api('/api/stats/monthly'),
+    api('/api/settings/savings-goal'),
   ]);
 
   document.getElementById('sum-income').textContent   = fmt(summary.income);
@@ -1005,15 +1020,45 @@ async function loadDashboard() {
   // Sparquote
   const sav = Math.abs((catData.find(c=>c.category==='Sparen & Investieren')||{}).total||0);
   const sqPct = summary.income>0 ? (sav/summary.income)*100 : 0;
+  const goalPct = goalData.value ? parseFloat(goalData.value) : null;
+  const goalMet = goalPct !== null && sqPct >= goalPct;
+  const sqColor = goalPct !== null
+    ? (goalMet ? 'var(--lime)' : sqPct >= goalPct*0.75 ? 'var(--orange)' : 'var(--red)')
+    : (sqPct>=20?'var(--lime)':sqPct>=10?'var(--orange)':'var(--red)');
+
   document.getElementById('sq-pct').textContent = sqPct.toFixed(1)+' %';
-  document.getElementById('sq-pct').style.color = sqPct>=20?'var(--lime)':sqPct>=10?'var(--orange)':'var(--red)';
+  document.getElementById('sq-pct').style.color = sqColor;
   document.getElementById('sq-sub').textContent = summary.income>0
     ? `${fmt(sav)} gespart von ${fmt(summary.income)} Einnahmen`
     : 'Keine Einnahmen im Zeitraum';
   const sqBar = document.getElementById('sq-bar');
   sqBar.style.width = Math.min(100,sqPct)+'%';
-  sqBar.style.background = sqPct>=20?'var(--lime)':sqPct>=10?'var(--orange)':'var(--red)';
+  sqBar.style.background = sqColor;
   document.getElementById('sq-mid').textContent = sqPct.toFixed(1)+' %';
+
+  // Goal marker
+  const hero   = document.getElementById('sq-hero');
+  const marker = document.getElementById('sq-goal-marker');
+  const status = document.getElementById('sq-goal-status');
+  const goalBtn = document.getElementById('sq-goal-btn');
+  if (goalPct !== null) {
+    marker.style.left = Math.min(100, goalPct)+'%';
+    marker.style.display = 'block';
+    goalBtn.textContent = `Ziel: ${goalPct} %`;
+    if (goalMet) {
+      status.innerHTML = `<span style="color:var(--lime);font-weight:600">✓ Sparziel ${goalPct} % erreicht!</span>`;
+      hero.classList.add('sq-goal-achieved');
+    } else {
+      const gap = (goalPct - sqPct).toFixed(1);
+      status.innerHTML = `<span style="color:var(--text3)">${gap} % fehlen noch zum Ziel von ${goalPct} %</span>`;
+      hero.classList.remove('sq-goal-achieved');
+    }
+  } else {
+    marker.style.display = 'none';
+    status.textContent = '';
+    goalBtn.textContent = 'Ziel setzen';
+    hero.classList.remove('sq-goal-achieved');
+  }
 
   // Budget
   const remaining = summary.income+summary.expenses;
@@ -1513,6 +1558,23 @@ async function loadSuspicious() {
   document.getElementById('susp-body').innerHTML=data.length
     ?data.map(r=>`<tr><td style="color:var(--text3)">${r.date}</td><td>${esc(r.merchant_name||r.description?.slice(0,50)||'—')}</td><td>${esc(r.category)}</td><td><span class="chip chip-warn">${r.source}</span></td><td class="${r.amount<0?'amount-neg':'amount-pos'}">${fmt(r.amount)}</td></tr>`).join('')
     :'<tr><td colspan="5" style="color:var(--text2);text-align:center;padding:20px">Keine verdächtigen Buchungen</td></tr>';
+}
+
+// ── Savings goal ───────────────────────────────────────────────────────────────
+async function editSavingsGoal() {
+  const btn = document.getElementById('sq-goal-btn');
+  const current = btn.textContent.includes('%') ? btn.textContent.replace('Ziel: ','').replace(' %','').trim() : '';
+  const input = prompt('Sparquoten-Ziel in % (z.B. 20):', current);
+  if (input === null) return;
+  if (input.trim() === '') {
+    // Clear goal
+    await api('/api/settings/savings-goal', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({value:''})});
+  } else {
+    const val = parseFloat(input.replace(',','.'));
+    if (isNaN(val) || val <= 0 || val > 100) { alert('Bitte eine Zahl zwischen 1 und 100 eingeben.'); return; }
+    await api('/api/settings/savings-goal', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({value: String(val)})});
+  }
+  loadDashboard();
 }
 
 // ── Budget ─────────────────────────────────────────────────────────────────────
