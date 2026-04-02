@@ -52,13 +52,23 @@ def _apply_db_rules(description: str, merchant: str, conn) -> str | None:
 
 def _insert_transactions(transactions: list[dict]) -> dict:
     conn = get_db()
+    # Load learned corrections: merchant → most-used category
+    corrections = {}
+    for row in conn.execute(
+        "SELECT merchant_name, category FROM category_corrections ORDER BY count DESC"
+    ).fetchall():
+        corrections.setdefault(row["merchant_name"], row["category"])
+
     inserted = 0
     skipped = 0
     for t in transactions:
-        # User-defined rules override parser category
+        # Priority 1: user-defined rules
         rule_cat = _apply_db_rules(t.get("description", ""), t.get("merchant_name", ""), conn)
         if rule_cat:
             t = {**t, "category": rule_cat}
+        # Priority 2: learned corrections
+        elif t.get("merchant_name") and t["merchant_name"] in corrections:
+            t = {**t, "category": corrections[t["merchant_name"]]}
         try:
             conn.execute("""
                 INSERT INTO transactions
@@ -153,6 +163,13 @@ def update_category(tx_id: int, body: dict):
     if category not in _all_categories(conn):
         conn.close()
         raise HTTPException(400, f"Unbekannte Kategorie: {category}")
+    # Track correction for smart categorization
+    tx = conn.execute("SELECT merchant_name FROM transactions WHERE id = ?", (tx_id,)).fetchone()
+    if tx and tx["merchant_name"]:
+        conn.execute("""
+            INSERT INTO category_corrections (merchant_name, category, count) VALUES (?, ?, 1)
+            ON CONFLICT(merchant_name, category) DO UPDATE SET count = count + 1
+        """, (tx["merchant_name"], category))
     conn.execute("UPDATE transactions SET category = ? WHERE id = ?", (category, tx_id))
     conn.commit()
     conn.close()
@@ -480,19 +497,34 @@ def stats_comparison(month: str = Query(None)):
 def stats_recurring():
     conn = get_db()
     rows = conn.execute("""
-        SELECT merchant_name, category,
-               ROUND(AVG(amount), 2) AS avg_amount,
-               COUNT(DISTINCT substr(date,1,7)) AS months,
-               MIN(date) AS first_date, MAX(date) AS last_date
-        FROM transactions
-        WHERE merchant_name != '' AND merchant_name IS NOT NULL
-          AND amount < 0 AND date != '0000-00-00'
-        GROUP BY merchant_name
+        SELECT t.merchant_name, t.category,
+               ROUND(AVG(t.amount), 2) AS avg_amount,
+               ROUND(MIN(t.amount), 2) AS min_amount,
+               ROUND(MAX(t.amount), 2) AS max_amount,
+               COUNT(DISTINCT substr(t.date,1,7)) AS months,
+               MIN(t.date) AS first_date, MAX(t.date) AS last_date,
+               (SELECT t2.amount FROM transactions t2
+                WHERE t2.merchant_name = t.merchant_name AND t2.amount < 0
+                  AND t2.date != '0000-00-00'
+                ORDER BY t2.date DESC LIMIT 1) AS last_amount
+        FROM transactions t
+        WHERE t.merchant_name != '' AND t.merchant_name IS NOT NULL
+          AND t.amount < 0 AND t.date != '0000-00-00'
+        GROUP BY t.merchant_name
         HAVING months >= 2
         ORDER BY months DESC, ABS(avg_amount) DESC
     """).fetchall()
     conn.close()
-    return [dict(r) for r in rows]
+    result = []
+    for r in rows:
+        avg = abs(r["avg_amount"] or 0)
+        spread = abs((r["max_amount"] or 0) - (r["min_amount"] or 0))
+        spread_pct = spread / avg if avg > 0 else 0
+        rec_type = "fix" if spread_pct < 0.05 else "variabel"
+        last = abs(r["last_amount"] or 0)
+        price_changed = avg > 0 and abs(last - avg) / avg > 0.10
+        result.append({**dict(r), "type": rec_type, "price_changed": price_changed})
+    return result
 
 
 @app.get("/api/transactions/suspicious")
@@ -580,6 +612,118 @@ def delete_category(name: str):
     conn.commit()
     conn.close()
     return {"ok": True}
+
+
+# ─── Budgets ───────────────────────────────────────────────────────────────────
+
+@app.get("/api/budgets")
+def list_budgets():
+    conn = get_db()
+    rows = conn.execute("SELECT category, monthly_budget FROM category_budgets ORDER BY category").fetchall()
+    conn.close()
+    return {r["category"]: r["monthly_budget"] for r in rows}
+
+
+@app.put("/api/budgets/{category}")
+def set_budget(category: str, body: dict):
+    try:
+        amount = float(body.get("amount", 0))
+    except (ValueError, TypeError):
+        raise HTTPException(400, "Ungültiger Betrag")
+    if amount <= 0:
+        raise HTTPException(400, "Betrag muss positiv sein")
+    conn = get_db()
+    if category not in _all_categories(conn):
+        conn.close()
+        raise HTTPException(400, "Unbekannte Kategorie")
+    conn.execute(
+        "INSERT INTO category_budgets (category, monthly_budget) VALUES (?, ?) "
+        "ON CONFLICT(category) DO UPDATE SET monthly_budget = excluded.monthly_budget",
+        (category, amount)
+    )
+    conn.commit()
+    conn.close()
+    return {"ok": True}
+
+
+@app.delete("/api/budgets/{category}")
+def delete_budget(category: str):
+    conn = get_db()
+    conn.execute("DELETE FROM category_budgets WHERE category = ?", (category,))
+    conn.commit()
+    conn.close()
+    return {"ok": True}
+
+
+@app.get("/api/budgets/status")
+def budget_status(month: str = Query(None)):
+    conn = get_db()
+    if not month:
+        row = conn.execute(
+            "SELECT MAX(substr(date,1,7)) FROM transactions WHERE date != '0000-00-00'"
+        ).fetchone()
+        month = row[0]
+    if not month:
+        conn.close()
+        return {"month": None, "categories": []}
+
+    budgets = {r["category"]: r["monthly_budget"] for r in
+               conn.execute("SELECT category, monthly_budget FROM category_budgets").fetchall()}
+
+    spending = {r["category"]: abs(r["total"]) for r in conn.execute("""
+        SELECT category, SUM(amount) AS total
+        FROM transactions
+        WHERE date LIKE ? AND amount < 0 AND category != 'Überweisung'
+        GROUP BY category
+    """, [f"{month}%"]).fetchall()}
+
+    conn.close()
+
+    result = []
+    seen = set()
+    for cat, budget in sorted(budgets.items()):
+        spent = spending.get(cat, 0)
+        result.append({
+            "category": cat,
+            "budget": budget,
+            "spent": round(spent, 2),
+            "pct": round(spent / budget * 100, 1) if budget > 0 else 0,
+        })
+        seen.add(cat)
+    for cat, spent in sorted(spending.items()):
+        if cat not in seen:
+            result.append({"category": cat, "budget": None, "spent": round(spent, 2), "pct": None})
+
+    return {"month": month, "categories": result}
+
+
+# ─── Import suggestions ────────────────────────────────────────────────────────
+
+@app.get("/api/import/suggestions")
+def import_suggestions():
+    """Return merchants frequently corrected to same category, without an existing rule."""
+    conn = get_db()
+    corrections = conn.execute(
+        "SELECT merchant_name, category, count FROM category_corrections WHERE count >= 2 ORDER BY count DESC"
+    ).fetchall()
+    rules = [r["pattern"] for r in conn.execute("SELECT pattern FROM category_rules").fetchall()]
+    conn.close()
+
+    suggestions = []
+    seen_merchants = set()
+    for row in corrections:
+        merchant = row["merchant_name"]
+        if merchant in seen_merchants:
+            continue
+        seen_merchants.add(merchant)
+        already_covered = any(rule in merchant.lower() for rule in rules)
+        if not already_covered:
+            suggestions.append({
+                "merchant_name": merchant,
+                "suggested_category": row["category"],
+                "count": row["count"],
+            })
+    return suggestions
 
 
 @app.get("/api/months")

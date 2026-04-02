@@ -260,6 +260,17 @@ tr:hover td { background: rgba(255,255,255,.02); }
 .yr th:first-child, .yr td:first-child { text-align: left; }
 .yr tfoot tr { font-weight: 700; border-top: 2px solid var(--border); }
 
+/* ── Budget items ── */
+.budget-item { display:flex; align-items:center; gap:16px; flex-wrap:wrap; }
+.budget-item-name { flex:0 0 170px; font-weight:600; }
+.budget-item-bar { flex:1; min-width:200px; }
+.budget-item-controls { display:flex; align-items:center; gap:8px; flex:0 0 auto; }
+.budget-inp { width:110px; }
+
+/* ── Suggestion item ── */
+.suggestion-item { display:flex; align-items:center; gap:12px; padding:12px 0; border-bottom:1px solid var(--border); }
+.suggestion-item:last-child { border-bottom:none; }
+
 /* ── Scrollbar ── */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: var(--bg2); }
@@ -344,6 +355,7 @@ tr:hover td { background: rgba(255,255,255,.02); }
 
   <div class="nav-section">Analyse</div>
   <a href="#" data-page="stats"><span class="ni">📈</span>Statistiken</a>
+  <a href="#" data-page="budget"><span class="ni">🎯</span>Budgetziele</a>
 
   <div class="nav-section">Einstellungen</div>
   <a href="#" data-page="rules"><span class="ni">🏷️</span>Regeln & Kategorien</a>
@@ -362,6 +374,7 @@ tr:hover td { background: rgba(255,255,255,.02); }
   <a href="#" class="active" data-page="dashboard">📊 Dashboard</a>
   <a href="#" data-page="transactions">📋 Transaktionen</a>
   <a href="#" data-page="stats">📈 Statistiken</a>
+  <a href="#" data-page="budget">🎯 Budgetziele</a>
   <a href="#" data-page="rules">🏷️ Regeln & Kategorien</a>
   <a href="#" data-page="import">⬆️ Import & Neu</a>
 </div>
@@ -605,7 +618,7 @@ tr:hover td { background: rgba(255,255,255,.02); }
       <div class="card">
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Händler</th><th>Kategorie</th><th style="text-align:right">Ø Betrag</th><th style="text-align:right">Monate</th><th>Erster</th><th>Letzter</th></tr></thead>
+            <thead><tr><th>Händler</th><th>Kategorie</th><th>Typ</th><th style="text-align:right">Ø Betrag</th><th style="text-align:right">Monate</th><th>Erster</th><th>Letzter</th></tr></thead>
             <tbody id="abo-body"></tbody>
           </table>
         </div>
@@ -733,6 +746,20 @@ tr:hover td { background: rgba(255,255,255,.02); }
     </div>
   </div>
 
+  <!-- ── BUDGET ─────────────────────────────────────────────────────────────── -->
+  <div class="page" id="page-budget">
+    <div class="page-header">
+      <h1>Budgetziele</h1>
+      <p>Setze monatliche Obergrenzen pro Kategorie</p>
+    </div>
+    <div class="toolbar">
+      <select id="budget-month"></select>
+      <button onclick="loadBudget()">Laden</button>
+    </div>
+    <div class="kpi-row" style="margin-bottom:24px" id="budget-kpis"></div>
+    <div id="budget-list"></div>
+  </div>
+
 </main>
 </div>
 
@@ -769,6 +796,21 @@ tr:hover td { background: rgba(255,255,255,.02); }
     <div class="modal-footer">
       <button class="sec" onclick="closeEntryModal()">Abbrechen</button>
       <button onclick="submitModal()">Speichern</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── SUGGESTIONS MODAL ─────────────────────────────────────────────────────── -->
+<div class="modal-backdrop" id="suggestions-modal" onclick="if(event.target===this)this.classList.remove('open')">
+  <div class="modal" style="max-width:540px">
+    <div class="modal-header">
+      <h2>💡 Regelvorschläge</h2>
+      <button class="modal-close" onclick="document.getElementById('suggestions-modal').classList.remove('open')">✕</button>
+    </div>
+    <p style="color:var(--text3);font-size:13px;margin-bottom:16px">Diese Händler wurden oft manuell umkategorisiert. Möchtest du eine Regel erstellen?</p>
+    <div id="suggestions-list"></div>
+    <div class="modal-footer">
+      <button class="sec" onclick="document.getElementById('suggestions-modal').classList.remove('open')">Schließen</button>
     </div>
   </div>
 </div>
@@ -865,6 +907,7 @@ function navigate(page) {
   if (page === 'dashboard')    loadDashboard();
   if (page === 'transactions') loadTx();
   if (page === 'stats')        loadStats();
+  if (page === 'budget')       loadBudget();
   if (page === 'rules')        { loadCats(); loadRules(); }
   if (page === 'import')       loadSuspicious();
 }
@@ -908,7 +951,7 @@ function popSel(sel, items, withAll=false) {
 }
 async function refreshMonths() {
   months = await api('/api/months');
-  ['dash-month','stats-month','tx-month','cmp-month'].forEach(id => {
+  ['dash-month','stats-month','tx-month','cmp-month','budget-month'].forEach(id => {
     const sel = document.getElementById(id);
     if (sel) popSel(sel, months, id==='tx-month' || id==='cmp-month');
   });
@@ -918,7 +961,7 @@ async function refreshMonths() {
 async function init() {
   [categories, months] = await Promise.all([api('/api/categories'), api('/api/months')]);
 
-  ['dash-month','stats-month'].forEach(id => popSel(document.getElementById(id), months));
+  ['dash-month','stats-month','budget-month'].forEach(id => popSel(document.getElementById(id), months));
   ['tx-month','cmp-month'].forEach(id => popSel(document.getElementById(id), months, true));
 
   const yrSel = document.getElementById('yr-year');
@@ -1331,7 +1374,20 @@ async function loadComparison() {
 }
 async function loadRecurring() {
   const data=await api('/api/stats/recurring');
-  document.getElementById('abo-body').innerHTML=data.length?data.map(r=>`<tr><td>${esc(r.merchant_name)}</td><td>${esc(r.category)}</td><td style="text-align:right;color:var(--red)">${fmt(Math.abs(r.avg_amount))}</td><td style="text-align:right">${r.months}x</td><td style="color:var(--text3)">${r.first_date}</td><td style="color:var(--text3)">${r.last_date}</td></tr>`).join(''):'<tr><td colspan="6" style="color:var(--text2);text-align:center;padding:20px">Keine wiederkehrenden Buchungen</td></tr>';
+  document.getElementById('abo-body').innerHTML=data.length?data.map(r=>`
+    <tr>
+      <td>
+        ${esc(r.merchant_name)}
+        ${r.price_changed?'<span class="chip chip-warn" style="margin-left:6px" title="Betrag hat sich um >10% verändert">⚠ Preisänderung</span>':''}
+      </td>
+      <td style="color:var(--text3)">${esc(r.category)}</td>
+      <td><span class="chip ${r.type==='fix'?'chip-std':'chip-user'}">${r.type==='fix'?'Fix':'Variabel'}</span></td>
+      <td style="text-align:right;color:var(--red)">${fmt(Math.abs(r.avg_amount))}</td>
+      <td style="text-align:right;color:var(--text3)">${r.months}x</td>
+      <td style="color:var(--text3)">${r.first_date}</td>
+      <td style="color:var(--text3)">${r.last_date}</td>
+    </tr>`).join('')
+  :'<tr><td colspan="7" style="color:var(--text2);text-align:center;padding:20px">Keine wiederkehrenden Buchungen</td></tr>';
 }
 
 // ── Categories ─────────────────────────────────────────────────────────────────
@@ -1436,6 +1492,7 @@ async function uploadFile(bank,inp) {
     const d=await api(`/api/import/${bank}`,{method:'POST',body:fd});
     showMsg(msg,'ok',`✓ ${d.inserted} importiert, ${d.skipped_duplicates} Duplikate`);
     await refreshMonths();
+    if (d.inserted > 0) checkSuggestions();
   } catch(e){ showMsg(msg,'err','✗ '+e.message); }
   inp.value='';
 }
@@ -1456,6 +1513,114 @@ async function loadSuspicious() {
   document.getElementById('susp-body').innerHTML=data.length
     ?data.map(r=>`<tr><td style="color:var(--text3)">${r.date}</td><td>${esc(r.merchant_name||r.description?.slice(0,50)||'—')}</td><td>${esc(r.category)}</td><td><span class="chip chip-warn">${r.source}</span></td><td class="${r.amount<0?'amount-neg':'amount-pos'}">${fmt(r.amount)}</td></tr>`).join('')
     :'<tr><td colspan="5" style="color:var(--text2);text-align:center;padding:20px">Keine verdächtigen Buchungen</td></tr>';
+}
+
+// ── Budget ─────────────────────────────────────────────────────────────────────
+async function loadBudget() {
+  const month = document.getElementById('budget-month').value;
+  const data = await api('/api/budgets/status' + (month ? `?month=${month}` : ''));
+  if (!data.month) {
+    document.getElementById('budget-kpis').innerHTML = '';
+    document.getElementById('budget-list').innerHTML = '<div style="color:var(--text2);padding:20px">Keine Daten vorhanden</div>';
+    return;
+  }
+
+  const withB = data.categories.filter(c => c.budget !== null);
+  const withoutB = data.categories.filter(c => c.budget === null);
+  const totalBudget = withB.reduce((s,c) => s+c.budget, 0);
+  const totalSpent  = withB.reduce((s,c) => s+c.spent,  0);
+  const overCount   = withB.filter(c => c.pct > 100).length;
+  const overColor   = overCount > 0 ? 'red' : 'lime';
+
+  document.getElementById('budget-kpis').innerHTML = `
+    <div class="kpi"><div class="kpi-dot blue"></div><div class="kpi-label">Gesamtbudget</div><div class="kpi-value blue">${fmt(totalBudget)}</div><div class="kpi-sub">${data.month}</div></div>
+    <div class="kpi"><div class="kpi-dot red"></div><div class="kpi-label">Ausgegeben</div><div class="kpi-value red">${fmt(totalSpent)}</div><div class="kpi-sub">${totalBudget>0?((totalSpent/totalBudget)*100).toFixed(0)+' %':'—'}</div></div>
+    <div class="kpi"><div class="kpi-dot ${overColor}"></div><div class="kpi-label">Überschritten</div><div class="kpi-value ${overColor}">${overCount}</div><div class="kpi-sub">Kategorie${overCount!==1?'n':''}</div></div>`;
+
+  const renderItem = (c, hasExisting) => {
+    const pct    = hasExisting ? Math.min(c.pct, 100) : 0;
+    const color  = c.pct > 100 ? 'var(--red)' : c.pct > 80 ? 'var(--orange)' : 'var(--lime)';
+    const catEsc = esc(c.category).replace(/'/g,"\\'");
+    return `<div class="card" style="margin-bottom:10px">
+      <div class="budget-item">
+        <div class="budget-item-name">${esc(c.category)}</div>
+        <div class="budget-item-bar">
+          ${hasExisting ? `
+            <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text2);margin-bottom:5px">
+              <span>${fmt(c.spent)} ausgegeben</span>
+              <span style="color:${color}">${c.pct.toFixed(0)} %</span>
+            </div>
+            <div class="budget-track"><div class="budget-fill" style="width:${pct}%;background:${color}"></div></div>
+            <div style="font-size:11px;color:var(--text2);margin-top:4px">von ${fmt(c.budget)}</div>
+          ` : `<div style="font-size:12px;color:var(--text3)">${fmt(c.spent)} ausgegeben · kein Budget gesetzt</div>`}
+        </div>
+        <div class="budget-item-controls">
+          <input type="number" class="budget-inp" value="${hasExisting ? c.budget : ''}" placeholder="Betrag" step="10" min="0">
+          <button onclick="saveBudget('${catEsc}',this)" style="padding:7px 12px;font-size:12px">✓</button>
+          ${hasExisting ? `<button class="danger" onclick="deleteBudget('${catEsc}',this)" style="padding:7px 10px;font-size:12px">✕</button>` : ''}
+        </div>
+      </div>
+    </div>`;
+  };
+
+  let html = '';
+  if (withB.length) {
+    html += '<div class="sh">Budgetziele</div>';
+    html += withB.map(c => renderItem(c, true)).join('');
+  }
+  if (withoutB.length) {
+    html += `<div class="sh">Ohne Budget (${withoutB.length})</div>`;
+    html += withoutB.map(c => renderItem(c, false)).join('');
+  }
+  if (!withB.length && !withoutB.length) {
+    html = '<div style="color:var(--text2);padding:20px">Keine Ausgaben im gewählten Monat</div>';
+  }
+  document.getElementById('budget-list').innerHTML = html;
+}
+
+async function saveBudget(category, btn) {
+  const inp = btn.closest('.card').querySelector('.budget-inp');
+  const amount = parseFloat(inp.value);
+  if (isNaN(amount) || amount <= 0) return;
+  await api(`/api/budgets/${encodeURIComponent(category)}`, {
+    method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({amount})
+  });
+  loadBudget();
+}
+
+async function deleteBudget(category, btn) {
+  await api(`/api/budgets/${encodeURIComponent(category)}`, {method:'DELETE'});
+  loadBudget();
+}
+
+// ── Suggestions ────────────────────────────────────────────────────────────────
+async function checkSuggestions() {
+  try {
+    const suggestions = await api('/api/import/suggestions');
+    if (!suggestions.length) return;
+    document.getElementById('suggestions-list').innerHTML = suggestions.map(s => {
+      const mEsc = esc(s.merchant_name).replace(/'/g,"\\'");
+      const cEsc = esc(s.suggested_category).replace(/'/g,"\\'");
+      return `<div class="suggestion-item">
+        <div style="flex:1">
+          <div style="font-weight:600">${esc(s.merchant_name)}</div>
+          <div style="font-size:12px;color:var(--text3)">${s.count}× als <strong style="color:var(--lime)">${esc(s.suggested_category)}</strong> kategorisiert</div>
+        </div>
+        <button onclick="createRuleFromSuggestion('${mEsc}','${cEsc}',this)" style="padding:6px 14px;font-size:12px">Regel erstellen</button>
+      </div>`;
+    }).join('');
+    document.getElementById('suggestions-modal').classList.add('open');
+  } catch(e) { /* silent */ }
+}
+
+async function createRuleFromSuggestion(merchant, category, btn) {
+  const pattern = merchant.toLowerCase().slice(0, 40);
+  try {
+    await api('/api/rules', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({pattern, category})});
+    btn.textContent = '✓ Erstellt';
+    btn.disabled = true;
+    btn.style.cssText += ';background:rgba(200,245,74,.15);color:var(--lime);border:1px solid rgba(200,245,74,.3)';
+  } catch(e) { btn.textContent = '✗ Fehler'; }
 }
 
 // ── Utils ──────────────────────────────────────────────────────────────────────

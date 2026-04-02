@@ -68,6 +68,18 @@ def init_db():
             name       TEXT UNIQUE NOT NULL,
             is_default INTEGER NOT NULL DEFAULT 0
         );
+
+        CREATE TABLE IF NOT EXISTS category_budgets (
+            category       TEXT PRIMARY KEY,
+            monthly_budget REAL NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS category_corrections (
+            merchant_name TEXT NOT NULL,
+            category      TEXT NOT NULL,
+            count         INTEGER NOT NULL DEFAULT 1,
+            PRIMARY KEY (merchant_name, category)
+        );
     """)
     conn.commit()
 
