@@ -314,12 +314,13 @@ def stats_summary(month: str = Query(None)):
     where = "WHERE date LIKE ?" if month else ""
     params = [f"{month}%"] if month else []
 
+    excl = "AND category != 'Überweisung'"
     row = conn.execute(f"""
         SELECT
             SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END) AS income,
             SUM(CASE WHEN amount < 0 THEN amount ELSE 0 END) AS expenses,
             COUNT(*) AS count
-        FROM transactions {where}
+        FROM transactions {where} {excl}
     """, params).fetchone()
 
     conn.close()
@@ -336,10 +337,10 @@ def stats_categories(month: str = Query(None), type: str = Query("expense")):
     conn = get_db()
     amount_filter = "amount > 0" if type == "income" else "amount < 0"
     if month:
-        where = f"WHERE date LIKE ? AND {amount_filter}"
+        where = f"WHERE date LIKE ? AND {amount_filter} AND category != 'Überweisung'"
         params = [f"{month}%"]
     else:
-        where = f"WHERE {amount_filter}"
+        where = f"WHERE {amount_filter} AND category != 'Überweisung'"
         params = []
 
     rows = conn.execute(f"""
@@ -362,7 +363,7 @@ def stats_monthly():
             SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END) AS income,
             SUM(CASE WHEN amount < 0 THEN amount ELSE 0 END) AS expenses
         FROM transactions
-        WHERE date != '0000-00-00'
+        WHERE date != '0000-00-00' AND category != 'Überweisung'
         GROUP BY month
         ORDER BY month DESC
         LIMIT 24
@@ -374,7 +375,7 @@ def stats_monthly():
 @app.get("/api/stats/timeline")
 def stats_timeline(category: str = Query(None)):
     conn = get_db()
-    where = "WHERE date != '0000-00-00' AND amount < 0 AND category = ?" if category else "WHERE date != '0000-00-00' AND amount < 0"
+    where = "WHERE date != '0000-00-00' AND amount < 0 AND category != 'Überweisung' AND category = ?" if category else "WHERE date != '0000-00-00' AND amount < 0 AND category != 'Überweisung'"
     params = [category] if category else []
 
     rows = conn.execute(f"""
@@ -390,7 +391,7 @@ def stats_timeline(category: str = Query(None)):
 @app.get("/api/stats/yearly")
 def stats_yearly(year: str = Query(None)):
     conn = get_db()
-    where = f"WHERE date LIKE '{year}%'" if year else "WHERE date != '0000-00-00'"
+    where = f"WHERE date LIKE '{year}%' AND category != 'Überweisung'" if year else "WHERE date != '0000-00-00' AND category != 'Überweisung'"
     rows = conn.execute(f"""
         SELECT substr(date, 1, 7) AS month,
                SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END) AS income,
@@ -438,7 +439,7 @@ def stats_comparison(month: str = Query(None)):
     def get_cats(m):
         rows = conn.execute("""
             SELECT category, SUM(ABS(amount)) AS total
-            FROM transactions WHERE date LIKE ? AND amount < 0
+            FROM transactions WHERE date LIKE ? AND amount < 0 AND category != 'Überweisung'
             GROUP BY category
         """, [f"{m}%"]).fetchall()
         return {r["category"]: r["total"] for r in rows}
@@ -447,7 +448,7 @@ def stats_comparison(month: str = Query(None)):
         row = conn.execute("""
             SELECT AVG(mt) FROM (
                 SELECT SUM(ABS(amount)) AS mt
-                FROM transactions WHERE amount < 0 AND category = ? AND date != '0000-00-00'
+                FROM transactions WHERE amount < 0 AND category = ? AND date != '0000-00-00' AND category != 'Überweisung'
                 GROUP BY substr(date,1,7)
             )
         """, [cat]).fetchone()
