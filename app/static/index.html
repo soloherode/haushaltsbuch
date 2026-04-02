@@ -1026,18 +1026,17 @@ const STANDARD_CATEGORIES = new Set([
 ]);
 
 async function loadCategories() {
-  const cats = await api('/api/categories');
+  const cats = await api('/api/categories/detail');
   const tbody = document.getElementById('categories-tbody');
   tbody.innerHTML = cats.map(c => {
-    const isStd = STANDARD_CATEGORIES.has(c);
-    const locked = c === 'Sonstiges';
+    const locked = c.name === 'Sonstiges';
     return `<tr>
-      <td>${esc(c)}</td>
-      <td><span class="chip ${isStd ? 'chip-orange' : 'chip-green'}">${isStd ? 'Standard' : 'Eigene'}</span></td>
+      <td>${esc(c.name)}</td>
+      <td><span class="chip ${c.is_default ? 'chip-orange' : 'chip-green'}">${c.is_default ? 'Standard' : 'Eigene'}</span></td>
       <td style="white-space:nowrap">
         ${!locked ? `
-          <button class="secondary" style="padding:4px 10px;font-size:11px" onclick="renameCategoryUI('${esc(c).replace(/'/g,"\\'")}')">✏️</button>
-          <button class="danger secondary" style="padding:4px 10px;font-size:11px;margin-left:4px" onclick="deleteCategoryUI('${esc(c).replace(/'/g,"\\'")}')">✕</button>
+          <button class="secondary" style="padding:4px 10px;font-size:11px" onclick="renameCategoryUI('${esc(c.name).replace(/'/g,"\\'")}')">✏️</button>
+          <button class="danger secondary" style="padding:4px 10px;font-size:11px;margin-left:4px" onclick="deleteCategoryUI('${esc(c.name).replace(/'/g,"\\'")}')">✕</button>
         ` : '<span style="color:var(--text2);font-size:12px" title="Kann nicht gelöscht werden">—</span>'}
       </td>
     </tr>`;

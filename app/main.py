@@ -512,12 +512,8 @@ def suspicious_transactions():
 
 
 def _all_categories(conn) -> list[str]:
-    user = [r["name"] for r in conn.execute("SELECT name FROM user_categories ORDER BY name").fetchall()]
-    result = list(CATEGORIES)
-    for c in user:
-        if c not in result:
-            result.append(c)
-    return result
+    rows = conn.execute("SELECT name FROM categories ORDER BY id").fetchall()
+    return [r["name"] for r in rows]
 
 
 @app.get("/api/categories")
@@ -528,18 +524,22 @@ def list_categories():
     return cats
 
 
+@app.get("/api/categories/detail")
+def list_categories_detail():
+    conn = get_db()
+    rows = conn.execute("SELECT name, is_default FROM categories ORDER BY id").fetchall()
+    conn.close()
+    return [{"name": r["name"], "is_default": bool(r["is_default"])} for r in rows]
+
+
 @app.post("/api/categories")
 def create_category(body: dict):
     name = str(body.get("name", "")).strip()
     if not name:
         raise HTTPException(400, "Name erforderlich")
     conn = get_db()
-    all_cats = _all_categories(conn)
-    if name in all_cats:
-        conn.close()
-        raise HTTPException(409, "Kategorie existiert bereits")
     try:
-        conn.execute("INSERT INTO user_categories (name) VALUES (?)", (name,))
+        conn.execute("INSERT INTO categories (name, is_default) VALUES (?, 0)", (name,))
         conn.commit()
     except sqlite3.IntegrityError:
         raise HTTPException(409, "Kategorie existiert bereits")
@@ -553,11 +553,17 @@ def rename_category(old_name: str, body: dict):
     new_name = str(body.get("name", "")).strip()
     if not new_name:
         raise HTTPException(400, "Name erforderlich")
+    if old_name == "Sonstiges":
+        raise HTTPException(400, '"Sonstiges" kann nicht umbenannt werden')
     conn = get_db()
-    conn.execute("UPDATE user_categories SET name = ? WHERE name = ?", (new_name, old_name))
-    conn.execute("UPDATE transactions SET category = ? WHERE category = ?", (new_name, old_name))
-    conn.commit()
-    conn.close()
+    try:
+        conn.execute("UPDATE categories SET name = ? WHERE name = ?", (new_name, old_name))
+        conn.execute("UPDATE transactions SET category = ? WHERE category = ?", (new_name, old_name))
+        conn.commit()
+    except sqlite3.IntegrityError:
+        raise HTTPException(409, "Name bereits vergeben")
+    finally:
+        conn.close()
     return {"ok": True}
 
 
@@ -566,7 +572,7 @@ def delete_category(name: str):
     if name == "Sonstiges":
         raise HTTPException(400, '"Sonstiges" kann nicht gelöscht werden')
     conn = get_db()
-    conn.execute("DELETE FROM user_categories WHERE name = ?", (name,))
+    conn.execute("DELETE FROM categories WHERE name = ?", (name,))
     conn.execute("UPDATE transactions SET category = 'Sonstiges' WHERE category = ?", (name,))
     conn.commit()
     conn.close()
