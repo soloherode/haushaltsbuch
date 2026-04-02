@@ -1,0 +1,13 @@
+services:
+  haushaltsbuch:
+    image: haushaltsbuch:latest
+    build: .
+    container_name: haushaltsbuch
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - haushaltsbuch_data:/app/data
+
+volumes:
+  haushaltsbuch_data:

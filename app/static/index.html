@@ -1,0 +1,1234 @@
+<!DOCTYPE html>
+<html lang="de" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Haushaltsbuch</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg:       #0f1117;
+    --surface:  #1a1d27;
+    --surface2: #22263a;
+    --border:   #2e3352;
+    --text:     #e8eaf0;
+    --text2:    #8b91b0;
+    --accent:   #6c63ff;
+    --green:    #4caf7d;
+    --red:      #e05c6a;
+    --orange:   #f0a050;
+    --radius:   12px;
+    --shadow:   0 2px 16px rgba(0,0,0,.4);
+  }
+  [data-theme="light"] {
+    --bg:      #f4f5f9;
+    --surface: #ffffff;
+    --surface2:#eef0f6;
+    --border:  #d8dbe8;
+    --text:    #1a1d27;
+    --text2:   #5c6280;
+    --shadow:  0 2px 12px rgba(0,0,0,.08);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 14px; line-height: 1.5; transition: background .2s, color .2s; }
+
+  .app { display: grid; grid-template-columns: 220px 1fr; min-height: 100vh; }
+  nav { background: var(--surface); border-right: 1px solid var(--border); padding: 24px 0; position: sticky; top: 0; height: 100vh; display: flex; flex-direction: column; }
+  nav .logo { padding: 0 24px 28px; font-size: 18px; font-weight: 700; color: var(--accent); letter-spacing: -.3px; }
+  nav a { display: flex; align-items: center; gap: 10px; padding: 11px 24px; color: var(--text2); text-decoration: none; border-left: 3px solid transparent; transition: all .15s; }
+  nav a:hover { color: var(--text); background: var(--surface2); }
+  nav a.active { color: var(--text); border-left-color: var(--accent); background: var(--surface2); }
+  nav .spacer { flex: 1; }
+  nav .theme-btn { margin: 0 16px 12px; background: var(--surface2); border: 1px solid var(--border); color: var(--text2); border-radius: 8px; padding: 8px 12px; cursor: pointer; font-size: 13px; display: flex; align-items: center; gap: 8px; }
+  nav .theme-btn:hover { color: var(--text); }
+  main { padding: 32px; overflow-y: auto; }
+  .page { display: none; }
+  .page.active { display: block; }
+
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; box-shadow: var(--shadow); }
+  .card-title { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .8px; color: var(--text2); margin-bottom: 8px; }
+
+  .summary-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 16px; }
+  .summary-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px 24px; }
+  .summary-card .label { font-size: 11px; text-transform: uppercase; letter-spacing: .8px; color: var(--text2); margin-bottom: 6px; }
+  .summary-card .value { font-size: 28px; font-weight: 700; letter-spacing: -.5px; }
+  .summary-card .value.green { color: var(--green); }
+  .summary-card .value.red { color: var(--red); }
+
+  .savings-card { background: var(--surface); border: 1px solid var(--accent); border-radius: var(--radius); padding: 24px 32px; margin-bottom: 16px; display: flex; align-items: center; gap: 32px; box-shadow: 0 0 24px rgba(108,99,255,.12); }
+  .savings-card .sq-main { flex: 0 0 200px; }
+  .savings-card .sq-label { font-size: 11px; text-transform: uppercase; letter-spacing: .8px; color: var(--text2); margin-bottom: 4px; }
+  .savings-card .sq-value { font-size: 52px; font-weight: 800; letter-spacing: -2px; line-height: 1; }
+  .savings-card .sq-sub { font-size: 12px; color: var(--text2); margin-top: 6px; }
+  .sq-bar-wrap { flex: 1; }
+  .sq-bar-track { height: 10px; background: var(--surface2); border-radius: 5px; overflow: hidden; margin-top: 8px; }
+  .sq-bar-fill { height: 100%; border-radius: 5px; transition: width .5s ease; }
+
+  .budget-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px 24px; margin-bottom: 24px; }
+  .budget-bar-track { height: 6px; background: var(--surface2); border-radius: 3px; overflow: hidden; margin-top: 10px; }
+  .budget-bar-fill { height: 100%; border-radius: 3px; transition: width .5s ease; }
+
+  .charts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px; }
+  .chart-wrap { position: relative; height: 260px; }
+  .full-card { margin-bottom: 24px; }
+  .full-card .chart-wrap { height: 220px; }
+
+  .toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 24px; flex-wrap: wrap; }
+  select, input[type=text], input[type=date], input[type=number] {
+    background: var(--surface); border: 1px solid var(--border); color: var(--text);
+    border-radius: 8px; padding: 8px 12px; font-size: 13px; outline: none;
+  }
+  select:focus, input:focus { border-color: var(--accent); }
+  button { background: var(--accent); color: #fff; border: none; border-radius: 8px; padding: 9px 18px; font-size: 13px; cursor: pointer; transition: opacity .15s; }
+  button:hover { opacity: .85; }
+  button.secondary { background: var(--surface2); border: 1px solid var(--border); color: var(--text); }
+  button.danger { background: var(--red); }
+  button.success { background: var(--green); }
+
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; padding: 10px 14px; font-size: 11px; text-transform: uppercase; letter-spacing: .6px; color: var(--text2); border-bottom: 1px solid var(--border); }
+  td { padding: 10px 14px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: var(--surface2); }
+  tr.suspicious td { background: rgba(240,160,80,.06); }
+  .amount-neg { color: var(--red); }
+  .amount-pos { color: var(--green); }
+
+  .pagination { display: flex; align-items: center; gap: 8px; margin-top: 16px; justify-content: flex-end; }
+  .pagination span { color: var(--text2); font-size: 13px; }
+
+  /* Batch bar */
+  .batch-bar { display: none; align-items: center; gap: 12px; background: var(--accent); color: #fff; border-radius: 8px; padding: 10px 16px; margin-bottom: 16px; }
+  .batch-bar.visible { display: flex; }
+  .batch-bar select { background: rgba(255,255,255,.2); border-color: rgba(255,255,255,.3); color: #fff; }
+  .batch-bar select option { background: var(--surface); color: var(--text); }
+
+  /* Note icon */
+  .note-btn { background: none; border: none; color: var(--text2); cursor: pointer; padding: 2px 6px; border-radius: 4px; font-size: 14px; }
+  .note-btn:hover { color: var(--accent); background: var(--surface2); }
+  .note-btn.has-note { color: var(--accent); }
+
+  /* Import */
+  .import-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 24px; }
+  .drop-zone { border: 2px dashed var(--border); border-radius: var(--radius); padding: 40px 24px; text-align: center; color: var(--text2); transition: all .2s; cursor: pointer; }
+  .drop-zone:hover, .drop-zone.over { border-color: var(--accent); color: var(--text); background: rgba(108,99,255,.05); }
+  .drop-zone .icon-big { font-size: 36px; margin-bottom: 12px; }
+  .drop-zone .hint { font-size: 12px; margin-top: 8px; }
+  .result-msg { margin-top: 14px; padding: 12px 16px; border-radius: 8px; font-size: 13px; display: none; }
+  .result-msg.ok  { background: rgba(76,175,125,.15); color: var(--green); border: 1px solid rgba(76,175,125,.3); }
+  .result-msg.err { background: rgba(224,92,106,.15); color: var(--red);   border: 1px solid rgba(224,92,106,.3); }
+
+  /* Manual form */
+  .manual-form { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .form-group { display: flex; flex-direction: column; gap: 6px; }
+  .form-group label { font-size: 11px; text-transform: uppercase; letter-spacing: .6px; color: var(--text2); }
+  .form-group input, .form-group select { background: var(--surface2); }
+
+  /* Cat inline edit */
+  .cat-select { background: var(--surface2); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 3px 8px; font-size: 12px; }
+
+  /* Section heading */
+  .section-heading { font-size: 12px; font-weight: 700; color: var(--text2); text-transform: uppercase; letter-spacing: .8px; margin: 28px 0 14px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+
+  /* Stat tabs */
+  .tabs { display: flex; gap: 4px; margin-bottom: 24px; background: var(--surface2); border-radius: 10px; padding: 4px; width: fit-content; }
+  .tab { padding: 8px 18px; border-radius: 7px; cursor: pointer; font-size: 13px; color: var(--text2); border: none; background: none; transition: all .15s; }
+  .tab.active { background: var(--accent); color: #fff; }
+  .tab-content { display: none; }
+  .tab-content.active { display: block; }
+
+  /* Yearly table */
+  .yearly-table th, .yearly-table td { text-align: right; }
+  .yearly-table th:first-child, .yearly-table td:first-child { text-align: left; }
+  .positive { color: var(--green); }
+  .negative { color: var(--red); }
+
+  /* Cat bars */
+  .cat-bar-list { display: flex; flex-direction: column; gap: 10px; }
+  .cat-bar-item { display: flex; align-items: center; gap: 10px; }
+  .cat-bar-label { width: 160px; font-size: 13px; color: var(--text2); flex-shrink: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cat-bar-track { flex: 1; height: 8px; background: var(--surface2); border-radius: 4px; overflow: hidden; }
+  .cat-bar-fill { height: 100%; border-radius: 4px; }
+  .cat-bar-value { width: 80px; text-align: right; font-size: 13px; font-weight: 600; flex-shrink: 0; }
+
+  h1 { font-size: 22px; font-weight: 700; margin-bottom: 24px; }
+  .subtitle { color: var(--text2); font-size: 13px; margin-top: -18px; margin-bottom: 24px; }
+
+  .chip { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 600; }
+  .chip-orange { background: rgba(240,160,80,.15); color: var(--orange); }
+  .chip-green  { background: rgba(76,175,125,.15); color: var(--green); }
+  .chip-red    { background: rgba(224,92,106,.15); color: var(--red); }
+
+  @media (max-width: 900px) {
+    .app { grid-template-columns: 1fr; }
+    nav { display: none; }
+    .charts-grid, .import-grid, .summary-row, .manual-form { grid-template-columns: 1fr; }
+    .savings-card { flex-direction: column; gap: 16px; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <nav>
+    <div class="logo">💰 Haushaltsbuch</div>
+    <a href="#" class="active" data-page="dashboard"><span>📊</span> Dashboard</a>
+    <a href="#" data-page="transactions"><span>📋</span> Transaktionen</a>
+    <a href="#" data-page="stats"><span>📈</span> Statistiken</a>
+    <a href="#" data-page="rules"><span>🏷️</span> Regeln</a>
+    <a href="#" data-page="import"><span>⬆️</span> Import & Neu</a>
+    <div class="spacer"></div>
+    <button class="theme-btn" onclick="toggleTheme()"><span id="theme-icon">☀️</span> <span id="theme-label">Hell</span></button>
+  </nav>
+
+  <main>
+    <!-- ── DASHBOARD ─────────────────────────────────────────────────────── -->
+    <div class="page active" id="page-dashboard">
+      <h1>Dashboard</h1>
+      <div class="toolbar">
+        <label style="color:var(--text2);font-size:13px">Monat:</label>
+        <select id="dash-month"></select>
+      </div>
+
+      <div class="summary-row">
+        <div class="summary-card"><div class="label">Einnahmen</div><div class="value green" id="sum-income">—</div></div>
+        <div class="summary-card"><div class="label">Ausgaben</div><div class="value red" id="sum-expenses">—</div></div>
+        <div class="summary-card"><div class="label">Bilanz</div><div class="value" id="sum-balance">—</div></div>
+      </div>
+
+      <div class="savings-card">
+        <div class="sq-main">
+          <div class="sq-label">Sparquote</div>
+          <div class="sq-value" id="sq-value">—</div>
+          <div class="sq-sub" id="sq-sub"></div>
+        </div>
+        <div class="sq-bar-wrap">
+          <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--text2)">
+            <span>0 %</span><span id="sq-bar-label">—</span><span>100 %</span>
+          </div>
+          <div class="sq-bar-track"><div class="sq-bar-fill" id="sq-bar" style="width:0%"></div></div>
+        </div>
+      </div>
+
+      <div class="budget-card">
+        <div class="label">Budget übrig (Einnahmen − Ausgaben)</div>
+        <div class="value" id="budget-remaining" style="font-size:36px;font-weight:700;margin-top:4px">—</div>
+        <div class="budget-bar-track"><div class="budget-bar-fill" id="budget-bar" style="width:0%"></div></div>
+        <div style="font-size:12px;color:var(--text2);margin-top:6px" id="budget-info"></div>
+      </div>
+
+      <div class="charts-grid">
+        <div class="card">
+          <div class="card-title">Ausgaben nach Kategorie</div>
+          <div class="chart-wrap"><canvas id="chart-pie"></canvas></div>
+        </div>
+        <div class="card" style="overflow-y:auto;max-height:320px">
+          <div class="card-title">Alle Ausgaben-Kategorien</div>
+          <div id="cat-bar-list" class="cat-bar-list" style="margin-top:8px"></div>
+        </div>
+      </div>
+
+      <div class="charts-grid">
+        <div class="card">
+          <div class="card-title">Einnahmen nach Kategorie</div>
+          <div class="chart-wrap"><canvas id="chart-income-pie"></canvas></div>
+        </div>
+        <div class="card" style="overflow-y:auto;max-height:320px">
+          <div class="card-title">Alle Einnahmen-Kategorien</div>
+          <div id="income-bar-list" class="cat-bar-list" style="margin-top:8px"></div>
+        </div>
+      </div>
+
+      <div class="card full-card">
+        <div class="card-title">Monatsverlauf (Einnahmen vs. Ausgaben)</div>
+        <div class="chart-wrap"><canvas id="chart-monthly"></canvas></div>
+      </div>
+    </div>
+
+    <!-- ── TRANSAKTIONEN ──────────────────────────────────────────────────── -->
+    <div class="page" id="page-transactions">
+      <h1>Transaktionen</h1>
+      <div class="toolbar">
+        <select id="tx-month"><option value="">Alle Monate</option></select>
+        <select id="tx-category"><option value="">Alle Kategorien</option></select>
+        <select id="tx-source">
+          <option value="">Alle Konten</option>
+          <option value="comdirect">comdirect</option>
+          <option value="hanseaticbank">HanseaticBank</option>
+          <option value="manual">Manuell</option>
+        </select>
+        <input type="text" id="tx-search" placeholder="Suchen…" style="width:180px">
+        <button onclick="loadTransactions()">Filtern</button>
+        <button class="secondary" onclick="exportCsv()" style="margin-left:auto">⬇ CSV Export</button>
+      </div>
+
+      <div class="batch-bar" id="batch-bar">
+        <span id="batch-count">0 ausgewählt</span>
+        <select id="batch-cat"></select>
+        <button onclick="applyBatchCategory()" style="padding:6px 14px">Kategorie setzen</button>
+        <button class="secondary" onclick="clearSelection()" style="padding:6px 14px;margin-left:auto">Abbrechen</button>
+      </div>
+
+      <div class="card">
+        <div class="table-wrap">
+          <table>
+            <thead><tr>
+              <th style="width:32px"><input type="checkbox" id="select-all" onchange="toggleSelectAll(this)"></th>
+              <th>Datum</th>
+              <th>Händler / Beschreibung</th>
+              <th>Kategorie</th>
+              <th>Konto</th>
+              <th style="text-align:right">Betrag</th>
+              <th style="width:60px"></th>
+            </tr></thead>
+            <tbody id="tx-tbody"></tbody>
+          </table>
+        </div>
+        <div class="pagination">
+          <span id="tx-info"></span>
+          <button class="secondary" id="tx-prev" onclick="txPage(-1)">‹ Zurück</button>
+          <button class="secondary" id="tx-next" onclick="txPage(1)">Weiter ›</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── STATISTIKEN ───────────────────────────────────────────────────── -->
+    <div class="page" id="page-stats">
+      <h1>Statistiken</h1>
+      <div class="tabs">
+        <button class="tab active" onclick="switchTab('kategorien')">Kategorien</button>
+        <button class="tab" onclick="switchTab('jahres')">Jahresübersicht</button>
+        <button class="tab" onclick="switchTab('vergleich')">Vergleich</button>
+        <button class="tab" onclick="switchTab('wiederkehrend')">Wiederkehrend</button>
+      </div>
+
+      <!-- Kategorien -->
+      <div class="tab-content active" id="tab-kategorien">
+        <div class="toolbar">
+          <label style="color:var(--text2);font-size:13px">Monat:</label>
+          <select id="stats-month"></select>
+        </div>
+        <div class="section-heading" style="margin-top:0">Ausgaben</div>
+        <div class="charts-grid">
+          <div class="card">
+            <div class="card-title">Ausgaben nach Kategorie</div>
+            <div class="chart-wrap"><canvas id="chart-stats-pie"></canvas></div>
+          </div>
+          <div class="card" style="overflow-y:auto;max-height:320px">
+            <div class="card-title">Aufschlüsselung</div>
+            <div id="stats-cat-list" class="cat-bar-list" style="margin-top:8px"></div>
+          </div>
+        </div>
+        <div class="section-heading">Einnahmen</div>
+        <div class="charts-grid">
+          <div class="card">
+            <div class="card-title">Einnahmen nach Kategorie</div>
+            <div class="chart-wrap"><canvas id="chart-stats-income-pie"></canvas></div>
+          </div>
+          <div class="card" style="overflow-y:auto;max-height:320px">
+            <div class="card-title">Aufschlüsselung</div>
+            <div id="stats-income-list" class="cat-bar-list" style="margin-top:8px"></div>
+          </div>
+        </div>
+        <div class="card full-card">
+          <div class="card-title">Ausgaben-Timeline nach Kategorie</div>
+          <div class="toolbar" style="margin-top:12px;margin-bottom:0">
+            <select id="timeline-cat"><option value="">Alle Ausgaben</option></select>
+          </div>
+          <div class="chart-wrap" style="height:240px"><canvas id="chart-timeline"></canvas></div>
+        </div>
+      </div>
+
+      <!-- Jahresübersicht -->
+      <div class="tab-content" id="tab-jahres">
+        <div class="toolbar">
+          <label style="color:var(--text2);font-size:13px">Jahr:</label>
+          <select id="yearly-year"></select>
+          <button onclick="loadYearly()">Laden</button>
+        </div>
+        <div class="card">
+          <div class="table-wrap">
+            <table class="yearly-table">
+              <thead><tr>
+                <th>Monat</th>
+                <th>Einnahmen</th>
+                <th>Ausgaben</th>
+                <th>Bilanz</th>
+                <th>Gespart</th>
+                <th>Sparquote</th>
+              </tr></thead>
+              <tbody id="yearly-tbody"></tbody>
+              <tfoot id="yearly-tfoot"></tfoot>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Vergleich -->
+      <div class="tab-content" id="tab-vergleich">
+        <div class="toolbar">
+          <label style="color:var(--text2);font-size:13px">Monat:</label>
+          <select id="compare-month"></select>
+          <button onclick="loadComparison()">Vergleichen</button>
+        </div>
+        <div class="card">
+          <div class="table-wrap">
+            <table>
+              <thead><tr>
+                <th>Kategorie</th>
+                <th style="text-align:right">Aktuell</th>
+                <th style="text-align:right">Vormonat</th>
+                <th style="text-align:right">Diff. Vormonat</th>
+                <th style="text-align:right">12M-Ø</th>
+                <th style="text-align:right">Diff. Ø</th>
+              </tr></thead>
+              <tbody id="compare-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Wiederkehrend -->
+      <div class="tab-content" id="tab-wiederkehrend">
+        <div class="card" style="margin-bottom:16px">
+          <p style="color:var(--text2);font-size:13px">Händler, die in mindestens 2 Monaten gebucht wurden (mögliche Abos / Fixkosten).</p>
+        </div>
+        <div class="card">
+          <div class="table-wrap">
+            <table>
+              <thead><tr>
+                <th>Händler</th>
+                <th>Kategorie</th>
+                <th style="text-align:right">Ø Betrag</th>
+                <th style="text-align:right">Monate</th>
+                <th>Erster</th>
+                <th>Letzter</th>
+              </tr></thead>
+              <tbody id="recurring-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── REGELN ────────────────────────────────────────────────────────── -->
+    <div class="page" id="page-rules">
+      <h1>Regeln & Kategorien</h1>
+
+      <div class="section-heading" style="margin-top:0">Kategorien verwalten</div>
+      <div class="card" style="margin-bottom:16px">
+        <div class="card-title">Neue Kategorie</div>
+        <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:8px">
+          <input type="text" id="cat-name-input" placeholder="Kategoriename" style="flex:1;min-width:200px">
+          <button onclick="createCategoryUI()">Hinzufügen</button>
+        </div>
+        <div class="result-msg" id="msg-categories"></div>
+      </div>
+      <div class="card" style="margin-bottom:24px">
+        <div class="table-wrap">
+          <table>
+            <thead><tr>
+              <th>Name</th>
+              <th>Typ</th>
+              <th></th>
+            </tr></thead>
+            <tbody id="categories-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="section-heading">Kategorisierungsregeln</div>
+      <p style="color:var(--text2);font-size:13px;margin-bottom:16px">Enthält ein Händlername oder eine Beschreibung das Muster, wird die Kategorie automatisch gesetzt – auch beim nächsten Import.</p>
+
+      <div class="card" style="margin-bottom:24px">
+        <div class="card-title">Neue Regel</div>
+        <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:8px">
+          <input type="text" id="rule-pattern" placeholder="Muster (z.B. amazon)" style="flex:1;min-width:180px">
+          <select id="rule-category" style="flex:1;min-width:160px"></select>
+          <button onclick="createRule()">Regel hinzufügen</button>
+          <button class="secondary" onclick="applyAllRules()">Alle neu kategorisieren</button>
+        </div>
+        <div class="result-msg" id="msg-rules"></div>
+      </div>
+
+      <div class="card">
+        <div class="table-wrap">
+          <table>
+            <thead><tr>
+              <th>Muster</th>
+              <th>Kategorie</th>
+              <th></th>
+            </tr></thead>
+            <tbody id="rules-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── IMPORT & NEU ───────────────────────────────────────────────────── -->
+    <div class="page" id="page-import">
+      <h1>Import & Neu</h1>
+
+      <div class="section-heading" style="margin-top:0">Datei-Import</div>
+      <div class="import-grid">
+        <div class="card">
+          <div class="card-title">comdirect Girokonto</div>
+          <p style="color:var(--text2);font-size:13px;margin-bottom:16px">CSV-Export aus dem Online-Banking (Umsätze → Export)</p>
+          <div class="drop-zone" id="drop-comdirect" onclick="document.getElementById('file-comdirect').click()">
+            <div class="icon-big">📄</div>
+            <div>CSV-Datei hierher ziehen</div>
+            <div class="hint">oder klicken zum Auswählen</div>
+          </div>
+          <input type="file" id="file-comdirect" accept=".csv" style="display:none" onchange="uploadFile('comdirect', this)">
+          <div class="result-msg" id="msg-comdirect"></div>
+        </div>
+        <div class="card">
+          <div class="card-title">HanseaticBank GenialCard</div>
+          <p style="color:var(--text2);font-size:13px;margin-bottom:16px">JSON aus Browser-DevConsole (Network → transactions-Endpoint)</p>
+          <div class="drop-zone" id="drop-hanseaticbank" onclick="document.getElementById('file-hanseaticbank').click()">
+            <div class="icon-big">📋</div>
+            <div>JSON-Datei hierher ziehen</div>
+            <div class="hint">oder klicken zum Auswählen</div>
+          </div>
+          <input type="file" id="file-hanseaticbank" accept=".json" style="display:none" onchange="uploadFile('hanseaticbank', this)">
+          <div class="result-msg" id="msg-hanseaticbank"></div>
+        </div>
+      </div>
+
+      <div class="section-heading">Manueller Eintrag</div>
+      <div class="card" style="margin-bottom:24px">
+        <div class="manual-form">
+          <div class="form-group">
+            <label>Datum</label>
+            <input type="date" id="man-date">
+          </div>
+          <div class="form-group">
+            <label>Betrag (negativ = Ausgabe)</label>
+            <input type="number" id="man-amount" placeholder="-49.90" step="0.01">
+          </div>
+          <div class="form-group">
+            <label>Beschreibung / Händler</label>
+            <input type="text" id="man-desc" placeholder="z.B. Supermarkt">
+          </div>
+          <div class="form-group">
+            <label>Kategorie</label>
+            <select id="man-category"></select>
+          </div>
+          <div class="form-group">
+            <label>Konto</label>
+            <input type="text" id="man-account" value="Manuell">
+          </div>
+          <div class="form-group" style="justify-content:flex-end;padding-top:20px">
+            <button onclick="submitManual()">Hinzufügen</button>
+          </div>
+        </div>
+        <div class="result-msg" id="msg-manual"></div>
+      </div>
+
+      <div class="section-heading">Backup & Restore</div>
+      <div class="import-grid">
+        <div class="card">
+          <div class="card-title">Backup herunterladen</div>
+          <p style="color:var(--text2);font-size:13px;margin-bottom:16px">Lädt die komplette SQLite-Datenbank als .db-Datei herunter.</p>
+          <button onclick="window.location='/api/backup'">⬇ Backup herunterladen</button>
+        </div>
+        <div class="card">
+          <div class="card-title">Datenbank wiederherstellen</div>
+          <p style="color:var(--text2);font-size:13px;margin-bottom:16px">Überschreibt die aktuelle Datenbank. Nicht rückgängig zu machen!</p>
+          <div class="drop-zone" id="drop-restore" onclick="document.getElementById('file-restore').click()">
+            <div class="icon-big">🗄️</div>
+            <div>.db-Datei hierher ziehen</div>
+            <div class="hint">oder klicken zum Auswählen</div>
+          </div>
+          <input type="file" id="file-restore" accept=".db" style="display:none" onchange="restoreBackup(this)">
+          <div class="result-msg" id="msg-restore"></div>
+        </div>
+      </div>
+
+      <div class="section-heading">Verdächtige Buchungen</div>
+      <div class="card">
+        <p style="color:var(--text2);font-size:13px;margin-bottom:16px">Gleicher Betrag, ähnliches Datum, unterschiedliche Quellen – mögliche Duplikate.</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr>
+              <th>Datum</th><th>Händler / Beschreibung</th><th>Kategorie</th><th>Quelle</th><th style="text-align:right">Betrag</th>
+            </tr></thead>
+            <tbody id="suspicious-tbody"></tbody>
+          </table>
+        </div>
+        <button onclick="loadSuspicious()" class="secondary" style="margin-top:12px">Aktualisieren</button>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script>
+// ── State ──────────────────────────────────────────────────────────────────────
+let txCurrentPage = 1;
+let txTotalPages  = 1;
+let categories    = [];
+let months        = [];
+let selectedIds   = new Set();
+
+const CATEGORY_COLORS = [
+  '#6c63ff','#4caf7d','#e05c6a','#f0a050','#40b4e0','#c97de0',
+  '#e07840','#60d0c0','#e0c040','#a0c0e0','#e080a0','#80a0e0'
+];
+
+// ── Theme ──────────────────────────────────────────────────────────────────────
+function applyTheme(t) {
+  document.documentElement.setAttribute('data-theme', t);
+  document.getElementById('theme-icon').textContent  = t === 'dark' ? '☀️' : '🌙';
+  document.getElementById('theme-label').textContent = t === 'dark' ? 'Hell' : 'Dunkel';
+}
+function toggleTheme() {
+  const next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+  localStorage.setItem('theme', next);
+  applyTheme(next);
+}
+applyTheme(localStorage.getItem('theme') || 'dark');
+
+// ── Navigation ─────────────────────────────────────────────────────────────────
+document.querySelectorAll('nav a').forEach(a => {
+  a.addEventListener('click', e => {
+    e.preventDefault();
+    document.querySelectorAll('nav a').forEach(x => x.classList.remove('active'));
+    document.querySelectorAll('.page').forEach(x => x.classList.remove('active'));
+    a.classList.add('active');
+    document.getElementById('page-' + a.dataset.page).classList.add('active');
+    if (a.dataset.page === 'dashboard')    loadDashboard();
+    if (a.dataset.page === 'transactions') loadTransactions();
+    if (a.dataset.page === 'stats')        loadStats();
+    if (a.dataset.page === 'rules')        { loadRules(); loadCategories(); }
+    if (a.dataset.page === 'import')       loadSuspicious();
+  });
+});
+
+// ── Stat tabs ──────────────────────────────────────────────────────────────────
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+  document.querySelector(`.tab[onclick*="${name}"]`).classList.add('active');
+  document.getElementById('tab-' + name).classList.add('active');
+  if (name === 'jahres')       loadYearly();
+  if (name === 'vergleich')    loadComparison();
+  if (name === 'wiederkehrend') loadRecurring();
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────────
+function fmt(v) {
+  return new Intl.NumberFormat('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(v) + ' €';
+}
+function fmtDiff(v) {
+  const cls = v > 0 ? 'negative' : v < 0 ? 'positive' : '';
+  return `<span class="${cls}">${v > 0 ? '+' : ''}${fmt(v)}</span>`;
+}
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+function esc(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function populateSelect(sel, items, withAll = false) {
+  const val = sel.value;
+  sel.innerHTML = withAll ? '<option value="">Alle Monate</option>' : '';
+  items.forEach(m => { const o = document.createElement('option'); o.value = m; o.textContent = m; sel.appendChild(o); });
+  if (val) sel.value = val;
+}
+function refreshMonthSelects() {
+  return api('/api/months').then(m => {
+    months = m;
+    populateSelect(document.getElementById('dash-month'), m);
+    populateSelect(document.getElementById('stats-month'), m);
+    populateSelect(document.getElementById('tx-month'), m, true);
+    populateSelect(document.getElementById('compare-month'), m);
+  });
+}
+
+// ── Init ───────────────────────────────────────────────────────────────────────
+async function init() {
+  [categories, months] = await Promise.all([api('/api/categories'), api('/api/months')]);
+
+  populateSelect(document.getElementById('dash-month'), months);
+  populateSelect(document.getElementById('stats-month'), months);
+  populateSelect(document.getElementById('tx-month'), months, true);
+  populateSelect(document.getElementById('compare-month'), months);
+
+  // year select
+  const years = [...new Set(months.map(m => m.slice(0,4)))];
+  const ySel = document.getElementById('yearly-year');
+  years.forEach(y => { const o = document.createElement('option'); o.value = y; o.textContent = y; ySel.appendChild(o); });
+
+  const catSelectors = ['tx-category','timeline-cat','man-category','rule-category','batch-cat'];
+  categories.forEach(c => {
+    catSelectors.forEach(id => {
+      const sel = document.getElementById(id);
+      if (!sel) return;
+      const o = document.createElement('option'); o.value = c; o.textContent = c; sel.appendChild(o);
+    });
+  });
+
+  document.getElementById('man-date').value = new Date().toISOString().slice(0, 10);
+  document.getElementById('dash-month').addEventListener('change', loadDashboard);
+  document.getElementById('stats-month').addEventListener('change', loadStats);
+  document.getElementById('timeline-cat').addEventListener('change', loadTimeline);
+
+  loadDashboard();
+  setupDropZones();
+}
+
+// ── Dashboard ──────────────────────────────────────────────────────────────────
+async function loadDashboard() {
+  const month = document.getElementById('dash-month').value;
+  const q = month ? `?month=${month}` : '';
+  const [summary, catData, incomeData, monthly] = await Promise.all([
+    api('/api/stats/summary' + q),
+    api('/api/stats/categories' + q),
+    api('/api/stats/categories' + (q ? q + '&type=income' : '?type=income')),
+    api('/api/stats/monthly'),
+  ]);
+
+  document.getElementById('sum-income').textContent   = fmt(summary.income);
+  document.getElementById('sum-expenses').textContent = fmt(Math.abs(summary.expenses));
+  const bal = document.getElementById('sum-balance');
+  bal.textContent  = fmt(summary.balance);
+  bal.className    = 'value ' + (summary.balance >= 0 ? 'green' : 'red');
+
+  // Sparquote
+  const sparenAmt = Math.abs((catData.find(c => c.category === 'Sparen & Investieren') || {}).total || 0);
+  const sqPct = summary.income > 0 ? (sparenAmt / summary.income) * 100 : 0;
+  document.getElementById('sq-value').textContent = sqPct.toFixed(1) + ' %';
+  document.getElementById('sq-value').style.color = sqPct >= 20 ? 'var(--green)' : sqPct >= 10 ? 'var(--orange)' : 'var(--red)';
+  document.getElementById('sq-sub').textContent   = summary.income > 0
+    ? `${fmt(sparenAmt)} gespart von ${fmt(summary.income)} Einnahmen`
+    : 'Keine Einnahmen im Zeitraum';
+  document.getElementById('sq-bar').style.width      = Math.min(100, sqPct) + '%';
+  document.getElementById('sq-bar').style.background = sqPct >= 20 ? 'var(--green)' : sqPct >= 10 ? 'var(--orange)' : 'var(--red)';
+  document.getElementById('sq-bar-label').textContent = sqPct.toFixed(1) + ' %';
+
+  // Budget
+  const remaining = summary.income + summary.expenses;
+  const spent     = Math.abs(summary.expenses);
+  document.getElementById('budget-remaining').textContent = fmt(remaining);
+  document.getElementById('budget-remaining').style.color = remaining >= 0 ? 'var(--green)' : 'var(--red)';
+  if (summary.income > 0) {
+    const usedPct = (spent / summary.income) * 100;
+    document.getElementById('budget-bar').style.width      = Math.min(100, usedPct) + '%';
+    document.getElementById('budget-bar').style.background = usedPct > 100 ? 'var(--red)' : usedPct > 80 ? 'var(--orange)' : 'var(--green)';
+    document.getElementById('budget-info').textContent     = `${fmt(spent)} von ${fmt(summary.income)} verbraucht (${usedPct.toFixed(0)} %)`;
+  } else {
+    document.getElementById('budget-bar').style.width = '0%';
+    document.getElementById('budget-info').textContent = spent > 0 ? `${fmt(spent)} Ausgaben ohne Einnahmen` : '';
+  }
+
+  renderPie('chart-pie', catData);
+  renderCatBars('cat-bar-list', catData, 'red');
+  renderPie('chart-income-pie', incomeData);
+  renderCatBars('income-bar-list', incomeData, 'green');
+  renderMonthly(monthly);
+}
+
+// ── Charts ─────────────────────────────────────────────────────────────────────
+function renderPie(canvasId, data) {
+  const canvas = document.getElementById(canvasId);
+  const existing = Chart.getChart(canvas);
+  if (existing) existing.destroy();
+  const items = data.slice(0, 12);
+  if (!items.length) { canvas.getContext('2d').clearRect(0,0,canvas.width,canvas.height); return; }
+  const total = items.reduce((s, c) => s + Math.abs(c.total), 0);
+  new Chart(canvas, {
+    type: 'doughnut',
+    data: {
+      labels: items.map(c => c.category),
+      datasets: [{ data: items.map(c => Math.abs(c.total)), backgroundColor: CATEGORY_COLORS, borderWidth: 0 }]
+    },
+    options: {
+      cutout: '65%',
+      plugins: {
+        legend: { position: 'right', labels: { color: '#8b91b0', font: { size: 11 }, boxWidth: 12, padding: 10 } },
+        tooltip: { callbacks: { label: ctx => {
+          const pct = total > 0 ? ((ctx.parsed / total) * 100).toFixed(1) : '0.0';
+          return ` ${ctx.label}: ${fmt(ctx.parsed)} (${pct} %)`;
+        }}}
+      },
+      maintainAspectRatio: false,
+    }
+  });
+}
+
+function renderCatBars(containerId, data, colorMode = 'red') {
+  const el = document.getElementById(containerId);
+  if (!data.length) { el.innerHTML = '<div style="color:var(--text2);font-size:13px;padding:8px 0">Keine Daten</div>'; return; }
+  const max = Math.abs(data[0].total);
+  el.innerHTML = data.map((c, i) => `
+    <div class="cat-bar-item">
+      <div class="cat-bar-label">${esc(c.category)}</div>
+      <div class="cat-bar-track"><div class="cat-bar-fill" style="width:${Math.abs(c.total)/max*100}%;background:${CATEGORY_COLORS[i%CATEGORY_COLORS.length]}"></div></div>
+      <div class="cat-bar-value" style="color:var(--${colorMode})">${fmt(Math.abs(c.total))}</div>
+    </div>`).join('');
+}
+
+function renderMonthly(monthly) {
+  const canvas = document.getElementById('chart-monthly');
+  const existing = Chart.getChart(canvas);
+  if (existing) existing.destroy();
+  const sorted = [...monthly].reverse();
+  new Chart(canvas, {
+    type: 'bar',
+    data: {
+      labels: sorted.map(m => m.month),
+      datasets: [
+        { label: 'Einnahmen', data: sorted.map(m => m.income),            backgroundColor: 'rgba(76,175,125,.7)', borderRadius: 4 },
+        { label: 'Ausgaben',  data: sorted.map(m => Math.abs(m.expenses)), backgroundColor: 'rgba(224,92,106,.7)', borderRadius: 4 },
+      ]
+    },
+    options: {
+      maintainAspectRatio: false,
+      plugins: { legend: { labels: { color: '#8b91b0', font: { size: 11 } } } },
+      scales: {
+        x: { ticks: { color: '#8b91b0', font: { size: 11 } }, grid: { color: 'rgba(46,51,82,.5)' } },
+        y: { ticks: { color: '#8b91b0', font: { size: 11 }, callback: v => v.toLocaleString('de-DE') + ' €' }, grid: { color: 'rgba(46,51,82,.5)' } }
+      }
+    }
+  });
+}
+
+// ── Transactions ───────────────────────────────────────────────────────────────
+async function loadTransactions() {
+  const month    = document.getElementById('tx-month').value;
+  const category = document.getElementById('tx-category').value;
+  const source   = document.getElementById('tx-source').value;
+  const search   = document.getElementById('tx-search').value;
+
+  let url = `/api/transactions?page=${txCurrentPage}&page_size=50`;
+  if (month)    url += `&month=${encodeURIComponent(month)}`;
+  if (category) url += `&category=${encodeURIComponent(category)}`;
+  if (source)   url += `&source=${encodeURIComponent(source)}`;
+  if (search)   url += `&search=${encodeURIComponent(search)}`;
+
+  const data = await api(url);
+  txTotalPages = Math.ceil(data.total / data.page_size) || 1;
+  document.getElementById('tx-info').textContent     = `${data.total} Einträge · Seite ${data.page} / ${txTotalPages}`;
+  document.getElementById('tx-prev').disabled        = txCurrentPage <= 1;
+  document.getElementById('tx-next').disabled        = txCurrentPage >= txTotalPages;
+  document.getElementById('select-all').checked      = false;
+
+  const tbody = document.getElementById('tx-tbody');
+  tbody.innerHTML = data.transactions.map(t => `
+    <tr id="row-${t.id}">
+      <td><input type="checkbox" class="row-check" value="${t.id}" onchange="onRowCheck()"></td>
+      <td style="color:var(--text2);white-space:nowrap">
+        <span class="date-display" style="cursor:pointer;border-bottom:1px dashed var(--border)" title="Klicken zum Bearbeiten" onclick="editDate(${t.id}, this)">${t.date}</span>
+      </td>
+      <td>
+        <div style="font-weight:500">${esc(t.merchant_name || t.description?.slice(0,60) || '—')}</div>
+        ${t.merchant_name ? `<div style="color:var(--text2);font-size:12px">${esc(t.description?.slice(0,70) || '')}</div>` : ''}
+        ${t.note ? `<div style="color:var(--accent);font-size:11px;margin-top:2px">📝 ${esc(t.note)}</div>` : ''}
+      </td>
+      <td>
+        <select class="cat-select" onchange="updateCategory(${t.id}, this.value)">
+          ${categories.map(c => `<option value="${c}"${c===t.category?' selected':''}>${c}</option>`).join('')}
+        </select>
+      </td>
+      <td style="color:var(--text2)">${t.source}</td>
+      <td style="text-align:right;font-weight:600;white-space:nowrap" class="${t.amount<0?'amount-neg':'amount-pos'}">${fmt(t.amount)}</td>
+      <td style="white-space:nowrap">
+        <button class="note-btn${t.note?' has-note':''}" data-note="${esc(t.note||'')}" onclick="editNote(${t.id}, this)" title="Notiz">📝</button>
+        <button class="secondary danger" style="padding:4px 10px;font-size:11px" onclick="deleteTx(${t.id}, this)">✕</button>
+      </td>
+    </tr>`).join('');
+}
+
+function txPage(dir) {
+  txCurrentPage = Math.max(1, Math.min(txTotalPages, txCurrentPage + dir));
+  loadTransactions();
+}
+
+// Selection
+function onRowCheck() {
+  selectedIds = new Set(
+    [...document.querySelectorAll('.row-check:checked')].map(c => parseInt(c.value))
+  );
+  const bar = document.getElementById('batch-bar');
+  bar.classList.toggle('visible', selectedIds.size > 0);
+  document.getElementById('batch-count').textContent = selectedIds.size + ' ausgewählt';
+}
+function toggleSelectAll(cb) {
+  document.querySelectorAll('.row-check').forEach(c => { c.checked = cb.checked; });
+  onRowCheck();
+}
+function clearSelection() {
+  document.querySelectorAll('.row-check').forEach(c => c.checked = false);
+  document.getElementById('select-all').checked = false;
+  selectedIds.clear();
+  document.getElementById('batch-bar').classList.remove('visible');
+}
+async function applyBatchCategory() {
+  const category = document.getElementById('batch-cat').value;
+  if (!category || !selectedIds.size) return;
+  await api('/api/transactions/batch-category', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ ids: [...selectedIds], category })
+  });
+  clearSelection();
+  loadTransactions();
+}
+
+function exportCsv() {
+  const month = document.getElementById('tx-month').value;
+  window.location = '/api/export/csv' + (month ? `?month=${month}` : '');
+}
+
+function editDate(id, span) {
+  const current = span.textContent.trim();
+  const input = document.createElement('input');
+  input.type = 'date'; input.value = current;
+  input.style.cssText = 'background:var(--surface2);border:1px solid var(--accent);color:var(--text);border-radius:6px;padding:2px 6px;font-size:13px;width:130px';
+  span.replaceWith(input); input.focus();
+  async function save() {
+    const d = input.value;
+    if (d && d !== current) await fetch(`/api/transactions/${id}/date`, { method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({date:d}) });
+    const s = document.createElement('span');
+    s.className = 'date-display'; s.style.cssText = 'cursor:pointer;border-bottom:1px dashed var(--border)';
+    s.title = 'Klicken zum Bearbeiten'; s.textContent = d || current;
+    s.onclick = () => editDate(id, s); input.replaceWith(s);
+  }
+  input.addEventListener('blur', save);
+  input.addEventListener('keydown', e => { if (e.key==='Enter') input.blur(); if (e.key==='Escape') { input.value=current; input.blur(); } });
+}
+
+function editNote(id, btn) {
+  const current = btn.getAttribute('data-note') || '';
+  const note = prompt('Notiz:', current);
+  if (note === null) return;
+  fetch(`/api/transactions/${id}/note`, { method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({note}) })
+    .then(() => loadTransactions());
+}
+
+async function updateCategory(id, category) {
+  await fetch(`/api/transactions/${id}/category`, { method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({category}) });
+}
+
+async function deleteTx(id, btn) {
+  if (!confirm('Transaktion löschen?')) return;
+  await fetch(`/api/transactions/${id}`, { method:'DELETE' });
+  btn.closest('tr').remove();
+}
+
+// ── Stats ──────────────────────────────────────────────────────────────────────
+async function loadStats() {
+  const month = document.getElementById('stats-month').value;
+  const q = month ? `?month=${month}` : '';
+  const [catData, incomeData] = await Promise.all([
+    api('/api/stats/categories' + q),
+    api('/api/stats/categories' + (q ? q + '&type=income' : '?type=income')),
+  ]);
+  renderPie('chart-stats-pie', catData);
+  renderCatBars('stats-cat-list', catData, 'red');
+  renderPie('chart-stats-income-pie', incomeData);
+  renderCatBars('stats-income-list', incomeData, 'green');
+  loadTimeline();
+}
+
+async function loadTimeline() {
+  const category = document.getElementById('timeline-cat').value;
+  const q = category ? `?category=${encodeURIComponent(category)}` : '';
+  const data = await api('/api/stats/timeline' + q);
+  const canvas = document.getElementById('chart-timeline');
+  const existing = Chart.getChart(canvas);
+  if (existing) existing.destroy();
+  new Chart(canvas, {
+    type: 'line',
+    data: {
+      labels: data.map(d => d.month),
+      datasets: [{ label: category || 'Alle Ausgaben', data: data.map(d => Math.abs(d.total)),
+        borderColor: '#6c63ff', backgroundColor: 'rgba(108,99,255,.1)', fill: true, tension: 0.3,
+        pointRadius: 4, pointBackgroundColor: '#6c63ff' }]
+    },
+    options: {
+      maintainAspectRatio: false,
+      plugins: { legend: { labels: { color: '#8b91b0', font: { size: 11 } } } },
+      scales: {
+        x: { ticks: { color: '#8b91b0', font: { size: 11 } }, grid: { color: 'rgba(46,51,82,.5)' } },
+        y: { ticks: { color: '#8b91b0', font: { size: 11 }, callback: v => v.toLocaleString('de-DE') + ' €' }, grid: { color: 'rgba(46,51,82,.5)' } }
+      }
+    }
+  });
+}
+
+async function loadYearly() {
+  const year = document.getElementById('yearly-year').value;
+  const data = await api('/api/stats/yearly' + (year ? `?year=${year}` : ''));
+  const tbody = document.getElementById('yearly-tbody');
+  const tfoot = document.getElementById('yearly-tfoot');
+  tbody.innerHTML = data.map(r => `
+    <tr>
+      <td>${r.month}</td>
+      <td class="positive">${fmt(r.income)}</td>
+      <td class="negative">${fmt(r.expenses)}</td>
+      <td class="${r.balance>=0?'positive':'negative'}">${fmt(r.balance)}</td>
+      <td>${fmt(r.savings)}</td>
+      <td>${r.savings_rate.toFixed(1)} %</td>
+    </tr>`).join('');
+  if (data.length) {
+    const totInc = data.reduce((s,r) => s+r.income, 0);
+    const totExp = data.reduce((s,r) => s+r.expenses, 0);
+    const totSav = data.reduce((s,r) => s+r.savings, 0);
+    const avgSQ  = data.reduce((s,r) => s+r.savings_rate, 0) / data.length;
+    tfoot.innerHTML = `<tr style="font-weight:700;border-top:2px solid var(--border)">
+      <td>Gesamt</td>
+      <td class="positive">${fmt(totInc)}</td>
+      <td class="negative">${fmt(totExp)}</td>
+      <td class="${(totInc-totExp)>=0?'positive':'negative'}">${fmt(totInc-totExp)}</td>
+      <td>${fmt(totSav)}</td>
+      <td>${avgSQ.toFixed(1)} %</td>
+    </tr>`;
+  }
+}
+
+async function loadComparison() {
+  const month = document.getElementById('compare-month').value;
+  const q = month ? `?month=${month}` : '';
+  const data = await api('/api/stats/comparison' + q);
+  if (!data.categories) return;
+  document.getElementById('compare-tbody').innerHTML = data.categories.map(r => `
+    <tr>
+      <td>${esc(r.category)}</td>
+      <td style="text-align:right;font-weight:600">${fmt(r.current)}</td>
+      <td style="text-align:right;color:var(--text2)">${fmt(r.previous)}</td>
+      <td style="text-align:right">${fmtDiff(r.diff_prev)}</td>
+      <td style="text-align:right;color:var(--text2)">${fmt(r.average)}</td>
+      <td style="text-align:right">${fmtDiff(r.diff_avg)}</td>
+    </tr>`).join('');
+}
+
+async function loadRecurring() {
+  const data = await api('/api/stats/recurring');
+  document.getElementById('recurring-tbody').innerHTML = data.length
+    ? data.map(r => `
+      <tr>
+        <td>${esc(r.merchant_name)}</td>
+        <td>${esc(r.category)}</td>
+        <td style="text-align:right;color:var(--red)">${fmt(Math.abs(r.avg_amount))}</td>
+        <td style="text-align:right">${r.months}x</td>
+        <td style="color:var(--text2)">${r.first_date}</td>
+        <td style="color:var(--text2)">${r.last_date}</td>
+      </tr>`).join('')
+    : '<tr><td colspan="6" style="color:var(--text2);text-align:center;padding:20px">Keine wiederkehrenden Buchungen gefunden</td></tr>';
+}
+
+// ── Categories management ──────────────────────────────────────────────────────
+const STANDARD_CATEGORIES = new Set([
+  'Einkommen','Lebensmittel','Restaurant & Cafe','Mobilität','Einkaufen',
+  'Kleidung','Kinder','Hobby','Gesundheit','Unterhaltung',
+  'Finanzen & Versicherung','Wohnen & Nebenkosten','Sparen & Investieren',
+  'Überweisung','Sonstiges'
+]);
+
+async function loadCategories() {
+  const cats = await api('/api/categories');
+  const tbody = document.getElementById('categories-tbody');
+  tbody.innerHTML = cats.map(c => {
+    const isStd = STANDARD_CATEGORIES.has(c);
+    const locked = c === 'Sonstiges';
+    return `<tr>
+      <td>${esc(c)}</td>
+      <td><span class="chip ${isStd ? 'chip-orange' : 'chip-green'}">${isStd ? 'Standard' : 'Eigene'}</span></td>
+      <td style="white-space:nowrap">
+        ${!locked ? `
+          <button class="secondary" style="padding:4px 10px;font-size:11px" onclick="renameCategoryUI('${esc(c).replace(/'/g,"\\'")}')">✏️</button>
+          <button class="danger secondary" style="padding:4px 10px;font-size:11px;margin-left:4px" onclick="deleteCategoryUI('${esc(c).replace(/'/g,"\\'")}')">✕</button>
+        ` : '<span style="color:var(--text2);font-size:12px" title="Kann nicht gelöscht werden">—</span>'}
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+async function createCategoryUI() {
+  const name = document.getElementById('cat-name-input').value.trim();
+  const msg  = document.getElementById('msg-categories');
+  if (!name) return;
+  try {
+    await api('/api/categories', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name}) });
+    document.getElementById('cat-name-input').value = '';
+    msg.className = 'result-msg ok'; msg.textContent = `✓ Kategorie "${name}" erstellt`; msg.style.display = 'block';
+    categories = await api('/api/categories');
+    refreshCategorySelects();
+    loadCategories();
+  } catch(e) {
+    msg.className = 'result-msg err'; msg.textContent = '✗ ' + e.message; msg.style.display = 'block';
+  }
+}
+
+async function renameCategoryUI(oldName) {
+  const newName = prompt('Neuer Name:', oldName);
+  if (!newName || newName === oldName) return;
+  const msg = document.getElementById('msg-categories');
+  try {
+    await api(`/api/categories/${encodeURIComponent(oldName)}`, { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name: newName}) });
+    msg.className = 'result-msg ok'; msg.textContent = `✓ Umbenannt: "${oldName}" → "${newName}"`; msg.style.display = 'block';
+    categories = await api('/api/categories');
+    refreshCategorySelects();
+    loadCategories();
+  } catch(e) {
+    msg.className = 'result-msg err'; msg.textContent = '✗ ' + e.message; msg.style.display = 'block';
+  }
+}
+
+async function deleteCategoryUI(name) {
+  if (!confirm(`Kategorie "${name}" löschen? Alle Buchungen werden auf "Sonstiges" gesetzt.`)) return;
+  const msg = document.getElementById('msg-categories');
+  try {
+    await api(`/api/categories/${encodeURIComponent(name)}`, { method:'DELETE' });
+    msg.className = 'result-msg ok'; msg.textContent = `✓ Kategorie "${name}" gelöscht`; msg.style.display = 'block';
+    categories = await api('/api/categories');
+    refreshCategorySelects();
+    loadCategories();
+  } catch(e) {
+    msg.className = 'result-msg err'; msg.textContent = '✗ ' + e.message; msg.style.display = 'block';
+  }
+}
+
+function refreshCategorySelects() {
+  const selIds = ['tx-category','timeline-cat','man-category','rule-category','batch-cat'];
+  selIds.forEach(id => {
+    const sel = document.getElementById(id);
+    if (!sel) return;
+    const cur = sel.value;
+    const withAll = id === 'tx-category' || id === 'timeline-cat';
+    sel.innerHTML = withAll ? '<option value="">Alle Kategorien</option>' : '';
+    categories.forEach(c => {
+      const o = document.createElement('option'); o.value = c; o.textContent = c; sel.appendChild(o);
+    });
+    sel.value = cur;
+  });
+}
+
+// ── Rules ──────────────────────────────────────────────────────────────────────
+async function loadRules() {
+  const rules = await api('/api/rules');
+  document.getElementById('rules-tbody').innerHTML = rules.length
+    ? rules.map(r => `
+      <tr>
+        <td><code style="background:var(--surface2);padding:2px 8px;border-radius:4px">${esc(r.pattern)}</code></td>
+        <td>${esc(r.category)}</td>
+        <td><button class="danger secondary" style="padding:4px 10px;font-size:11px" onclick="deleteRule(${r.id}, this)">✕</button></td>
+      </tr>`).join('')
+    : '<tr><td colspan="3" style="color:var(--text2);text-align:center;padding:20px">Keine Regeln angelegt</td></tr>';
+}
+
+async function createRule() {
+  const pattern  = document.getElementById('rule-pattern').value.trim();
+  const category = document.getElementById('rule-category').value;
+  const msg      = document.getElementById('msg-rules');
+  if (!pattern) return;
+  try {
+    await api('/api/rules', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({pattern, category}) });
+    document.getElementById('rule-pattern').value = '';
+    msg.className = 'result-msg ok'; msg.textContent = `✓ Regel "${pattern} → ${category}" gespeichert`; msg.style.display = 'block';
+    loadRules();
+  } catch(e) {
+    msg.className = 'result-msg err'; msg.textContent = '✗ ' + e.message; msg.style.display = 'block';
+  }
+}
+
+async function deleteRule(id, btn) {
+  await fetch(`/api/rules/${id}`, { method:'DELETE' });
+  btn.closest('tr').remove();
+}
+
+async function applyAllRules() {
+  const msg = document.getElementById('msg-rules');
+  const data = await api('/api/rules/apply-all', { method:'POST' });
+  msg.className = 'result-msg ok'; msg.textContent = `✓ ${data.updated} Transaktionen neu kategorisiert`; msg.style.display = 'block';
+}
+
+// ── Manual Entry ───────────────────────────────────────────────────────────────
+async function submitManual() {
+  const date    = document.getElementById('man-date').value;
+  const amount  = parseFloat(document.getElementById('man-amount').value);
+  const desc    = document.getElementById('man-desc').value.trim();
+  const cat     = document.getElementById('man-category').value;
+  const account = document.getElementById('man-account').value.trim() || 'Manuell';
+  const msg     = document.getElementById('msg-manual');
+  if (!date || isNaN(amount) || !desc) {
+    msg.className = 'result-msg err'; msg.textContent = '✗ Datum, Betrag und Beschreibung erforderlich.'; msg.style.display = 'block'; return;
+  }
+  try {
+    const data = await api('/api/transactions', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({date, amount, description:desc, category:cat, account_name:account}) });
+    msg.className = 'result-msg ok'; msg.textContent = `✓ Eintrag gespeichert (ID ${data.id})`;
+    document.getElementById('man-amount').value = '';
+    document.getElementById('man-desc').value   = '';
+    await refreshMonthSelects();
+  } catch(e) {
+    msg.className = 'result-msg err'; msg.textContent = '✗ ' + e.message;
+  }
+  msg.style.display = 'block';
+}
+
+// ── Import ─────────────────────────────────────────────────────────────────────
+async function uploadFile(bank, inputEl) {
+  const file = inputEl.files[0]; if (!file) return;
+  const msg = document.getElementById('msg-' + bank); msg.style.display = 'none';
+  const fd = new FormData(); fd.append('file', file);
+  try {
+    const data = await api(`/api/import/${bank}`, { method:'POST', body:fd });
+    msg.className = 'result-msg ok'; msg.textContent = `✓ ${data.inserted} importiert, ${data.skipped_duplicates} Duplikate übersprungen`;
+    await refreshMonthSelects();
+  } catch(e) { msg.className = 'result-msg err'; msg.textContent = '✗ ' + e.message; }
+  msg.style.display = 'block'; inputEl.value = '';
+}
+
+async function restoreBackup(inputEl) {
+  if (!confirm('Datenbank wirklich überschreiben? Alle aktuellen Daten gehen verloren!')) { inputEl.value=''; return; }
+  const file = inputEl.files[0]; if (!file) return;
+  const msg  = document.getElementById('msg-restore'); msg.style.display = 'none';
+  const fd   = new FormData(); fd.append('file', file);
+  try {
+    await api('/api/restore', { method:'POST', body:fd });
+    msg.className = 'result-msg ok'; msg.textContent = '✓ Datenbank wiederhergestellt. Seite wird neu geladen…'; msg.style.display = 'block';
+    setTimeout(() => location.reload(), 1500);
+  } catch(e) { msg.className = 'result-msg err'; msg.textContent = '✗ ' + e.message; msg.style.display = 'block'; }
+  inputEl.value = '';
+}
+
+async function loadSuspicious() {
+  const data = await api('/api/transactions/suspicious');
+  document.getElementById('suspicious-tbody').innerHTML = data.length
+    ? data.map(r => `<tr>
+        <td style="color:var(--text2)">${r.date}</td>
+        <td>${esc(r.merchant_name || r.description?.slice(0,50) || '—')}</td>
+        <td>${esc(r.category)}</td>
+        <td><span class="chip chip-orange">${r.source}</span></td>
+        <td style="text-align:right;font-weight:600" class="${r.amount<0?'amount-neg':'amount-pos'}">${fmt(r.amount)}</td>
+      </tr>`).join('')
+    : '<tr><td colspan="5" style="color:var(--text2);text-align:center;padding:20px">Keine verdächtigen Buchungen gefunden</td></tr>';
+}
+
+function setupDropZones() {
+  ['comdirect','hanseaticbank'].forEach(bank => {
+    const zone  = document.getElementById('drop-' + bank);
+    const input = document.getElementById('file-' + bank);
+    zone.addEventListener('dragover',  e => { e.preventDefault(); zone.classList.add('over'); });
+    zone.addEventListener('dragleave', () => zone.classList.remove('over'));
+    zone.addEventListener('drop', e => {
+      e.preventDefault(); zone.classList.remove('over');
+      const dt = new DataTransfer(); dt.items.add(e.dataTransfer.files[0]);
+      input.files = dt.files; uploadFile(bank, input);
+    });
+  });
+  const rZone  = document.getElementById('drop-restore');
+  const rInput = document.getElementById('file-restore');
+  rZone.addEventListener('dragover',  e => { e.preventDefault(); rZone.classList.add('over'); });
+  rZone.addEventListener('dragleave', () => rZone.classList.remove('over'));
+  rZone.addEventListener('drop', e => {
+    e.preventDefault(); rZone.classList.remove('over');
+    const dt = new DataTransfer(); dt.items.add(e.dataTransfer.files[0]);
+    rInput.files = dt.files; restoreBackup(rInput);
+  });
+}
+
+init();
+</script>
+</body>
+</html>

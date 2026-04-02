@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(chmod +x /Users/shalm/Desktop/claude/haushaltsbuch/run.sh)",
+      "Bash(pip install:*)",
+      "Bash(pip3 install:*)",
+      "Bash(curl -s -X POST http://127.0.0.1:8000/api/import/comdirect -F \"file=@/Users/shalm/Downloads/umsaetze_1182859809_20260401-1936.csv\")",
+      "Bash(curl -s http://127.0.0.1:8000/api/stats/summary)",
+      "Bash(curl -s http://127.0.0.1:8000/api/months)"
+    ]
+  }
+}
