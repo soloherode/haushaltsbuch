@@ -185,9 +185,10 @@ def update_note(tx_id: int, body: dict):
 def batch_update_category(body: dict):
     ids = body.get("ids", [])
     category = body.get("category", "").strip()
-    if not ids or category not in CATEGORIES:
-        raise HTTPException(400, "Ungültige Anfrage")
     conn = get_db()
+    if not ids or category not in _all_categories(conn):
+        conn.close()
+        raise HTTPException(400, "Ungültige Anfrage")
     placeholders = ",".join("?" * len(ids))
     conn.execute(
         f"UPDATE transactions SET category = ? WHERE id IN ({placeholders})",
@@ -256,10 +257,11 @@ def list_rules():
 def create_rule(body: dict):
     pattern = str(body.get("pattern", "")).strip().lower()
     category = body.get("category", "").strip()
-    if not pattern or category not in CATEGORIES:
-        raise HTTPException(400, "Ungültige Regel")
     priority = int(body.get("priority", 0))
     conn = get_db()
+    if not pattern or category not in _all_categories(conn):
+        conn.close()
+        raise HTTPException(400, "Ungültige Regel")
     conn.execute(
         "INSERT INTO category_rules (pattern, category, priority) VALUES (?, ?, ?)",
         (pattern, category, priority)
