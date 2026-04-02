@@ -836,10 +836,7 @@ async function loadDashboard() {
 function renderSankey(summary, catData, incData) {
   const wrap = document.getElementById('sankey-wrap');
   const W = wrap.clientWidth || 800;
-  const H = 360;
   const svg = document.getElementById('sankey-svg');
-  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
-  svg.setAttribute('height', H);
   svg.innerHTML = '';
 
   const nodes = [], links = [];
@@ -857,6 +854,10 @@ function renderSankey(summary, catData, incData) {
 
   // Expense nodes (right)
   const validExp = catData.filter(c=>c.total<0);
+  const catCount = Math.max(validExp.length, validInc.length, 4);
+  const H = Math.max(380, catCount * 52);
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  svg.setAttribute('height', H);
   validExp.forEach(c => {
     const idx = nodes.length;
     nodes.push({name:c.category, type:'expense'});
@@ -875,11 +876,12 @@ function renderSankey(summary, catData, incData) {
     return;
   }
 
+  const PAD_L = 160, PAD_R = 220;
   const sankey = d3.sankey()
     .nodeId(d=>d.index)
     .nodeWidth(18)
     .nodePadding(14)
-    .extent([[24,20],[W-24,H-20]]);
+    .extent([[PAD_L, 20],[W-PAD_R, H-20]]);
 
   const graph = sankey({
     nodes: nodes.map((d,i)=>({...d,index:i})),
@@ -934,7 +936,7 @@ function renderSankey(summary, catData, incData) {
     const isLeft = node.x0 < W/2;
     const txt = document.createElementNS('http://www.w3.org/2000/svg','text');
     const cy = (node.y0+node.y1)/2;
-    txt.setAttribute('x', isLeft ? node.x0-6 : node.x1+6);
+    txt.setAttribute('x', isLeft ? node.x0-10 : node.x1+10);
     txt.setAttribute('y', cy);
     txt.setAttribute('text-anchor', isLeft?'end':'start');
     txt.setAttribute('dominant-baseline','middle');
