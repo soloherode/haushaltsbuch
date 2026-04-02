@@ -8,7 +8,7 @@
 <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/d3-sankey@0.12.3/dist/d3-sankey.min.js"></script>
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Calistoga&family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap');
 
 :root {
   /* Surfaces */
@@ -95,10 +95,11 @@ nav a.active { color: var(--lime); background: rgba(0,82,255,.07); font-weight: 
 nav a .ni {
   width: 28px; height: 28px; border-radius: 8px;
   display: flex; align-items: center; justify-content: center;
-  font-size: 13px; flex-shrink: 0;
-  background: var(--sur2); transition: all .18s;
+  flex-shrink: 0; background: var(--sur2); transition: all .18s;
+  color: var(--text2);
 }
-nav a.active .ni { background: rgba(0,82,255,.1); }
+nav a.active .ni { background: rgba(0,82,255,.1); color: var(--lime); }
+nav a:hover .ni  { color: var(--text); }
 .nav-spacer { flex: 1; }
 .nav-theme {
   margin: 8px 10px 0;
@@ -119,7 +120,7 @@ main { padding: 40px 48px; overflow-y: auto; max-width: 1400px; }
 .page-header { margin-bottom: 32px; }
 .page-header h1 {
   font-size: 32px; font-weight: 400; letter-spacing: -.3px;
-  font-family: 'Calistoga', serif; color: var(--text); line-height: 1.1;
+  font-weight: 800; color: var(--text); line-height: 1.1; letter-spacing: -.5px;
 }
 .page-header p { color: var(--text2); font-size: 14px; margin-top: 5px; line-height: 1.6; }
 
@@ -224,7 +225,7 @@ button.danger:hover { background: rgba(239,68,68,.13); transform: translateY(-1p
   pointer-events: none;
 }
 .sq-left { flex: 0 0 auto; }
-.sq-pct { font-size: 68px; font-weight: 400; letter-spacing: -2px; line-height: 1; color: #0052FF; font-family: 'Calistoga', serif; }
+.sq-pct { font-size: 64px; font-weight: 800; letter-spacing: -3px; line-height: 1; color: #0052FF; }
 .sq-label { font-size: 9.5px; font-weight: 500; text-transform: uppercase; letter-spacing: .12em; color: rgba(255,255,255,.35); margin-bottom: 6px; font-family: 'JetBrains Mono', monospace; }
 .sq-sub { font-size: 12px; color: rgba(255,255,255,.45); margin-top: 8px; }
 .sq-right { flex: 1; }
@@ -248,7 +249,7 @@ button.danger:hover { background: rgba(239,68,68,.13); transform: translateY(-1p
 /* ── Budget bar ── */
 .budget-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r2); padding: 22px 26px; margin-bottom: 24px; box-shadow: var(--sh-md); }
 .budget-top { display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 12px; }
-.budget-value { font-size: 28px; font-weight: 700; letter-spacing: -1px; font-family: 'Calistoga', serif; }
+.budget-value { font-size: 28px; font-weight: 800; letter-spacing: -1px; }
 .budget-track { height: 6px; background: var(--sur3); border-radius: 3px; overflow: hidden; }
 .budget-fill  { height: 100%; border-radius: 3px; transition: width .6s cubic-bezier(.4,0,.2,1); }
 .budget-info  { font-size: 12px; color: var(--text2); margin-top: 8px; }
@@ -400,7 +401,7 @@ tr:hover td { background: rgba(0,82,255,.025); }
 }
 @keyframes modal-in { from { opacity:0; transform:translateY(16px) scale(.98); } to { opacity:1; transform:none; } }
 .modal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }
-.modal-header h2 { font-size: 20px; font-weight: 400; font-family: 'Calistoga', serif; }
+.modal-header h2 { font-size: 18px; font-weight: 700; letter-spacing: -.3px; }
 .modal-close { background: none; border: none; color: var(--text2); font-size: 20px; cursor: pointer; padding: 0; line-height: 1; box-shadow: none; }
 .modal-close:hover { color: var(--text); transform: none; }
 .modal-footer { display: flex; gap: 10px; justify-content: flex-end; margin-top: 24px; }
@@ -471,36 +472,60 @@ tr:hover td { background: rgba(0,82,255,.025); }
 
 <!-- ── NAV ─────────────────────────────────────────────────────────────── -->
 <nav>
-  <div class="nav-logo"><div class="logo-icon">💸</div>Haushaltsbuch</div>
+  <div class="nav-logo">
+    <div class="logo-icon">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+    </div>
+    Haushaltsbuch
+  </div>
 
   <div class="nav-section">Übersicht</div>
-  <a href="#" class="active" data-page="dashboard"><span class="ni">📊</span>Dashboard</a>
-  <a href="#" data-page="transactions"><span class="ni">📋</span>Transaktionen</a>
+  <a href="#" class="active" data-page="dashboard">
+    <span class="ni"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg></span>Dashboard
+  </a>
+  <a href="#" data-page="transactions">
+    <span class="ni"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg></span>Transaktionen
+  </a>
 
   <div class="nav-section">Analyse</div>
-  <a href="#" data-page="stats"><span class="ni">📈</span>Statistiken</a>
-  <a href="#" data-page="budget"><span class="ni">🎯</span>Budgetziele</a>
+  <a href="#" data-page="stats">
+    <span class="ni"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg></span>Statistiken
+  </a>
+  <a href="#" data-page="budget">
+    <span class="ni"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></span>Budgetziele
+  </a>
 
   <div class="nav-section">Einstellungen</div>
-  <a href="#" data-page="rules"><span class="ni">🏷️</span>Regeln & Kategorien</a>
-  <a href="#" data-page="import"><span class="ni">⬆️</span>Import & Neu</a>
+  <a href="#" data-page="rules">
+    <span class="ni"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg></span>Regeln & Kategorien
+  </a>
+  <a href="#" data-page="import">
+    <span class="ni"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></span>Import & Neu
+  </a>
 
   <div class="nav-spacer"></div>
-  <button class="nav-theme" onclick="toggleTheme()"><span id="theme-icon">☀️</span><span id="theme-lbl">Hell</span></button>
+  <button class="nav-theme" onclick="toggleTheme()"><span id="theme-icon">☀</span><span id="theme-lbl">Hell</span></button>
 </nav>
 
 <!-- ── MOBILE HEADER ─────────────────────────────────────────────────────── -->
 <div class="mobile-header">
-  <div class="mobile-logo"><div class="mobile-logo-icon">💸</div>Haushaltsbuch</div>
-  <button class="burger" onclick="toggleMenu()">☰</button>
+  <div class="mobile-logo">
+    <div class="mobile-logo-icon">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+    </div>
+    Haushaltsbuch
+  </div>
+  <button class="burger" onclick="toggleMenu()">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+  </button>
 </div>
 <div class="mobile-menu" id="mobile-menu">
-  <a href="#" class="active" data-page="dashboard">📊 Dashboard</a>
-  <a href="#" data-page="transactions">📋 Transaktionen</a>
-  <a href="#" data-page="stats">📈 Statistiken</a>
-  <a href="#" data-page="budget">🎯 Budgetziele</a>
-  <a href="#" data-page="rules">🏷️ Regeln & Kategorien</a>
-  <a href="#" data-page="import">⬆️ Import & Neu</a>
+  <a href="#" class="active" data-page="dashboard">Dashboard</a>
+  <a href="#" data-page="transactions">Transaktionen</a>
+  <a href="#" data-page="stats">Statistiken</a>
+  <a href="#" data-page="budget">Budgetziele</a>
+  <a href="#" data-page="rules">Regeln & Kategorien</a>
+  <a href="#" data-page="import">Import & Neu</a>
 </div>
 
 <!-- ── MAIN ─────────────────────────────────────────────────────────────── -->
@@ -977,7 +1002,7 @@ function setTheme(t) {
     r.removeProperty('--sur2'); r.removeProperty('--sur3'); r.removeProperty('--border');
     r.removeProperty('--bord2'); r.removeProperty('--text'); r.removeProperty('--text2'); r.removeProperty('--text3');
   }
-  document.getElementById('theme-icon').textContent = t === 'dark' ? '☀️' : '🌙';
+  document.getElementById('theme-icon').textContent = t === 'dark' ? '☀' : '◐';
   document.getElementById('theme-lbl').textContent  = t === 'dark' ? 'Hell' : 'Dunkel';
 }
 function toggleTheme() {
