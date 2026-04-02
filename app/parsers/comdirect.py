@@ -26,12 +26,9 @@ def _parse_date(value: str) -> Optional[str]:
 
 
 def _extract_merchant(buchungstext: str) -> str:
-    """Try to extract a clean merchant / counterpart name from Buchungstext."""
-    # Empfänger: Name
     m = re.search(r"Empfänger:\s*(.+?)(?:Kto/IBAN|BLZ/BIC|Buchungstext|$)", buchungstext)
     if m:
         return m.group(1).strip()
-    # Auftraggeber: Name
     m = re.search(r"Auftraggeber:\s*(.+?)(?:Buchungstext|$)", buchungstext)
     if m:
         return m.group(1).strip()
@@ -43,9 +40,13 @@ def _make_hash(account: str, date: str, amount: float, description: str) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
+def _is_kartenabrechnung(vorgang: str, buchungstext: str) -> bool:
+    text = (vorgang + " " + buchungstext).lower()
+    return "kartenabrechnung" in text or "visa-kartenabrechnung" in text
+
+
 def parse_comdirect_csv(content: bytes, account_name: str = "comdirect Girokonto") -> list[dict]:
-    """Parse a comdirect CSV export and return a list of transaction dicts."""
-    # Detect encoding
+    """Parse a comdirect CSV export (Girokonto or Kreditkarte) and return transactions."""
     try:
         text = content.decode("iso-8859-1")
     except Exception:
@@ -54,32 +55,60 @@ def parse_comdirect_csv(content: bytes, account_name: str = "comdirect Girokonto
     reader = csv.reader(io.StringIO(text), delimiter=";")
     rows = list(reader)
 
-    transactions = []
+    # Detect account type and column layout from header row
+    # Girokonto:   Buchungstag | Wertstellung | Vorgang | Buchungstext | Umsatz
+    # Kreditkarte: Buchungstag | Umsatztag    | Vorgang | Referenz     | Buchungstext | Umsatz
+    is_kreditkarte = False
     header_found = False
 
     for row in rows:
         if not row:
             continue
+        cleaned = [c.strip().strip('"') for c in row]
+        if "Buchungstag" in cleaned:
+            # detect by presence of "Referenz" column
+            is_kreditkarte = "Referenz" in cleaned
+            if not account_name or account_name == "comdirect Girokonto":
+                if is_kreditkarte:
+                    account_name = "comdirect Kreditkarte"
+            header_found = True
+            break
 
-        # Find the data header row
-        if not header_found:
-            cleaned = [c.strip().strip('"') for c in row]
-            if "Buchungstag" in cleaned:
-                header_found = True
-            continue
+    if not header_found:
+        return []
 
-        # Skip empty / footer rows
-        if len(row) < 5:
+    # Column indices
+    if is_kreditkarte:
+        IDX_DATE, IDX_WERT, IDX_VORGANG, IDX_TEXT, IDX_UMSATZ = 0, 1, 2, 4, 5
+        MIN_COLS = 6
+    else:
+        IDX_DATE, IDX_WERT, IDX_VORGANG, IDX_TEXT, IDX_UMSATZ = 0, 1, 2, 3, 4
+        MIN_COLS = 5
+
+    transactions = []
+    in_data = False
+
+    for row in rows:
+        if not row:
             continue
         cells = [c.strip().strip('"') for c in row]
+
+        # Skip until after header
+        if not in_data:
+            if "Buchungstag" in cells:
+                in_data = True
+            continue
+
+        if len(cells) < MIN_COLS:
+            continue
         if cells[0] in ("", "Alter Kontostand", "Neuer Kontostand"):
             continue
 
-        buchungstag   = cells[0]
-        wertstellung  = cells[1]
-        vorgang       = cells[2]
-        buchungstext  = cells[3]
-        umsatz_str    = cells[4]
+        buchungstag  = cells[IDX_DATE]
+        wertstellung = cells[IDX_WERT]
+        vorgang      = cells[IDX_VORGANG]
+        buchungstext = cells[IDX_TEXT]
+        umsatz_str   = cells[IDX_UMSATZ]
 
         if not umsatz_str:
             continue
@@ -89,15 +118,21 @@ def parse_comdirect_csv(content: bytes, account_name: str = "comdirect Girokonto
         except ValueError:
             continue
 
-        date          = _parse_date(buchungstag) or _parse_date(wertstellung)
+        date = _parse_date(buchungstag) or _parse_date(wertstellung)
         if date is None:
-            date = "0000-00-00"  # pending / open booking
+            date = "0000-00-00"
 
         transaction_date = _parse_date(wertstellung)
-        merchant_name    = _extract_merchant(buchungstext)
-        category         = categorize_from_comdirect(vorgang, buchungstext)
-        booked           = _parse_date(buchungstag) is not None
-        description      = buchungstext
+        booked = _parse_date(buchungstag) is not None
+
+        # Kartenabrechnung = internal transfer between accounts → "Überweisung"
+        # excludes it from expense/income stats on both sides
+        if _is_kartenabrechnung(vorgang, buchungstext):
+            category = "Überweisung"
+            merchant_name = "Kartenabrechnung"
+        else:
+            merchant_name = _extract_merchant(buchungstext) if not is_kreditkarte else buchungstext.strip()
+            category = categorize_from_comdirect(vorgang, buchungstext)
 
         import_hash = _make_hash(account_name, buchungstag + wertstellung, amount, buchungstext)
 
@@ -107,7 +142,7 @@ def parse_comdirect_csv(content: bytes, account_name: str = "comdirect Girokonto
             "date":             date,
             "transaction_date": transaction_date,
             "amount":           amount,
-            "description":      description,
+            "description":      buchungstext,
             "merchant_name":    merchant_name,
             "category":         category,
             "subcategory":      None,
