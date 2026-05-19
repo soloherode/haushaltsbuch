@@ -268,6 +268,8 @@ button.danger:hover { background: rgba(239,68,68,.13); transform: translateY(-1p
 /* ── Bar list ── */
 .bar-list { display: flex; flex-direction: column; gap: 10px; overflow-y: auto; max-height: 260px; padding-right: 4px; }
 .bar-item { display: flex; align-items: center; gap: 10px; }
+.bar-item.clickable { cursor: pointer; border-radius: 8px; padding: 4px 6px; margin: -4px -6px; transition: background .15s; }
+.bar-item.clickable:hover { background: rgba(0,82,255,.07); }
 .bar-label { width: 150px; font-size: 12.5px; color: var(--text3); flex-shrink: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .bar-track { flex: 1; height: 6px; background: var(--sur2); border-radius: 3px; overflow: hidden; }
 .bar-fill  { height: 100%; border-radius: 3px; }
@@ -667,6 +669,7 @@ th.sortable.desc::after { content: '↓'; opacity: .8; color: var(--lime); }
       </select>
       <input type="text" id="tx-search" placeholder="Suchen…" style="width:180px">
       <button onclick="loadTx()">Filtern</button>
+      <button class="sec" onclick="openEntryModal()">+ Hinzufügen</button>
       <button class="sec" onclick="exportCsv()" style="margin-left:auto">⬇ CSV</button>
     </div>
 
@@ -695,7 +698,8 @@ th.sortable.desc::after { content: '↓'; opacity: .8; color: var(--lime); }
       </div>
       <div class="pagination">
         <span id="tx-info"></span>
-        <button class="sec" id="tx-prev" onclick="txPage(-1)">‹ Zurück</button>
+        <span id="tx-sum" style="color:var(--text2);font-size:12.5px"></span>
+        <button class="sec" id="tx-prev" onclick="txPage(-1)" style="margin-left:auto">‹ Zurück</button>
         <button class="sec" id="tx-next" onclick="txPage(1)">Weiter ›</button>
       </div>
     </div>
@@ -733,6 +737,24 @@ th.sortable.desc::after { content: '↓'; opacity: .8; color: var(--lime); }
           <select id="tl-cat"><option value="">Alle Ausgaben</option></select>
         </div>
         <div class="chart-tall"><canvas id="chart-tl"></canvas></div>
+      </div>
+
+      <div class="card full" id="stats-tx-card" style="display:none">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+          <div class="card-label" id="stats-tx-label" style="margin-bottom:0">Transaktionen</div>
+          <span id="stats-tx-sum" style="font-size:12.5px;color:var(--text2)"></span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr>
+              <th>Datum</th>
+              <th>Händler / Beschreibung</th>
+              <th>Konto</th>
+              <th style="text-align:right">Betrag</th>
+            </tr></thead>
+            <tbody id="stats-tx-body"></tbody>
+          </table>
+        </div>
       </div>
     </div>
 
@@ -839,29 +861,25 @@ th.sortable.desc::after { content: '↓'; opacity: .8; color: var(--lime); }
     <div class="page-header"><h1>Import & Neu</h1></div>
 
     <div class="sh">Datei-Import</div>
-    <div class="import-grid">
-      <div class="card">
-        <div class="card-label" style="margin-bottom:10px">comdirect Girokonto</div>
-        <p style="color:var(--text3);font-size:13px;margin-bottom:16px">CSV-Export aus dem Online-Banking</p>
-        <div class="drop-zone" id="dz-cd" onclick="document.getElementById('f-cd').click()">
-          <div class="dz-icon">📄</div>
-          <div>CSV-Datei hierher ziehen</div>
-          <div style="font-size:12px;margin-top:4px;color:var(--text2)">oder klicken</div>
+    <div class="card" style="margin-bottom:24px">
+      <div style="display:flex;align-items:flex-end;gap:16px;margin-bottom:20px;flex-wrap:wrap">
+        <div class="fg" style="flex:1;min-width:200px">
+          <label>Konto / Quelle</label>
+          <select id="import-source" onchange="updateImportUI()">
+            <option value="comdirect-giro">Comdirect Girokonto</option>
+            <option value="comdirect-cc">Comdirect Kreditkarte</option>
+            <option value="hanseaticbank">Hanseatic Kreditkarte</option>
+          </select>
         </div>
-        <input type="file" id="f-cd" accept=".csv" style="display:none" onchange="uploadFile('comdirect',this)">
-        <div class="msg" id="msg-cd"></div>
+        <p id="import-hint" style="color:var(--text3);font-size:13px;flex:2;min-width:200px;padding-bottom:2px">CSV-Export aus dem Online-Banking</p>
       </div>
-      <div class="card">
-        <div class="card-label" style="margin-bottom:10px">HanseaticBank GenialCard</div>
-        <p style="color:var(--text3);font-size:13px;margin-bottom:16px">JSON aus Browser-DevConsole</p>
-        <div class="drop-zone" id="dz-hb" onclick="document.getElementById('f-hb').click()">
-          <div class="dz-icon">📋</div>
-          <div>JSON-Datei hierher ziehen</div>
-          <div style="font-size:12px;margin-top:4px;color:var(--text2)">oder klicken</div>
-        </div>
-        <input type="file" id="f-hb" accept=".json" style="display:none" onchange="uploadFile('hanseaticbank',this)">
-        <div class="msg" id="msg-hb"></div>
+      <div class="drop-zone" id="dz-unified" onclick="document.getElementById('f-unified').click()">
+        <div class="dz-icon" id="dz-unified-icon">📄</div>
+        <div id="dz-unified-label">CSV-Datei hierher ziehen</div>
+        <div style="font-size:12px;margin-top:4px;color:var(--text2)">oder klicken</div>
       </div>
+      <input type="file" id="f-unified" accept=".csv" style="display:none" onchange="uploadUnified(this)">
+      <div class="msg" id="msg-unified"></div>
     </div>
 
     <div class="sh">Manueller Eintrag</div>
@@ -1055,7 +1073,11 @@ async function submitModal() {
     const d = await api('/api/transactions', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({date, amount, description:desc, category:cat, account_name:account})});
     showMsg(msg, 'ok', `✓ Gespeichert`);
     await refreshMonths();
-    setTimeout(() => { closeEntryModal(); loadDashboard(); }, 800);
+    setTimeout(() => {
+      closeEntryModal();
+      loadDashboard();
+      if (document.getElementById('page-transactions').classList.contains('active')) loadTx();
+    }, 800);
   } catch(e) { showMsg(msg, 'err', '✗ '+e.message); }
 }
 
@@ -1376,7 +1398,7 @@ function renderSankey(summary, catData, incData) {
 }
 
 // ── Charts ─────────────────────────────────────────────────────────────────────
-function renderPie(canvasId, data) {
+function renderPie(canvasId, data, onClickCategory) {
   const canvas = document.getElementById(canvasId);
   const existing = Chart.getChart(canvas);
   if (existing) existing.destroy();
@@ -1399,21 +1421,32 @@ function renderPie(canvasId, data) {
         }}}
       },
       maintainAspectRatio: false,
+      onClick: onClickCategory ? (e, elements) => {
+        if (elements.length > 0) onClickCategory(items[elements[0].index].category);
+      } : undefined,
+      onHover: onClickCategory ? (e, elements) => {
+        e.native.target.style.cursor = elements.length > 0 ? 'pointer' : 'default';
+      } : undefined,
     }
   });
 }
 
-function renderBars(id, data, colorKey) {
+function renderBars(id, data, colorKey, onClickCategory) {
   const el = document.getElementById(id);
   if (!data.length) { el.innerHTML='<div style="color:var(--text2);font-size:13px;padding:8px 0">Keine Daten</div>'; return; }
   const max = Math.abs(data[0].total);
   const col = colorKey==='lime'?'var(--lime)':'var(--red)';
   el.innerHTML = data.map((c,i)=>`
-    <div class="bar-item">
+    <div class="bar-item${onClickCategory?' clickable':''}" ${onClickCategory?`data-cat="${esc(c.category)}"`:''}>
       <div class="bar-label" title="${esc(c.category)}">${esc(c.category)}</div>
       <div class="bar-track"><div class="bar-fill" style="width:${Math.abs(c.total)/max*100}%;background:${COLORS[i%COLORS.length]}"></div></div>
       <div class="bar-val" style="color:${col}">${fmt(Math.abs(c.total))}</div>
     </div>`).join('');
+  if (onClickCategory) {
+    el.querySelectorAll('.bar-item.clickable').forEach(item => {
+      item.addEventListener('click', () => onClickCategory(item.dataset.cat));
+    });
+  }
 }
 
 function renderMonthly(monthly) {
@@ -1471,6 +1504,11 @@ async function loadTx() {
   const data = await api(url);
   txPages_ = Math.ceil(data.total/data.page_size)||1;
   document.getElementById('tx-info').textContent = `${data.total} Einträge · Seite ${data.page}/${txPages_}`;
+  const sumEl = document.getElementById('tx-sum');
+  if (sumEl && data.total_sum !== undefined) {
+    const s = data.total_sum;
+    sumEl.innerHTML = `Summe: <strong style="color:${s>=0?'var(--lime)':'var(--red)'}">${fmt(s)}</strong>`;
+  }
   document.getElementById('tx-prev').disabled = txPage_<=1;
   document.getElementById('tx-next').disabled = txPage_>=txPages_;
   document.getElementById('sel-all').checked = false;
@@ -1561,9 +1599,20 @@ async function loadStats() {
   const month=document.getElementById('stats-month').value;
   const q=month?`?month=${month}`:'';
   const [cat,inc]=await Promise.all([api('/api/stats/categories'+q),api('/api/stats/categories'+(q?q+'&type=income':'?type=income'))]);
-  renderPie('chart-s-pie',cat); renderBars('stats-bars',cat,'red');
-  renderPie('chart-s-inc-pie',inc); renderBars('stats-inc-bars',inc,'lime');
+  renderPie('chart-s-pie', cat, filterTimelineByCategory);
+  renderBars('stats-bars', cat, 'red', filterTimelineByCategory);
+  renderPie('chart-s-inc-pie', inc);
+  renderBars('stats-inc-bars', inc, 'lime');
   loadTimeline();
+}
+
+function filterTimelineByCategory(cat) {
+  const sel = document.getElementById('tl-cat');
+  if (sel) sel.value = cat;
+  loadTimeline();
+  setTimeout(() => {
+    document.getElementById('chart-tl')?.closest('.card')?.scrollIntoView({behavior:'smooth', block:'start'});
+  }, 100);
 }
 async function loadTimeline() {
   const cat=document.getElementById('tl-cat').value;
@@ -1572,6 +1621,43 @@ async function loadTimeline() {
   const canvas=document.getElementById('chart-tl');
   const ex=Chart.getChart(canvas); if(ex)ex.destroy();
   new Chart(canvas,{type:'line',data:{labels:data.map(d=>d.month),datasets:[{label:cat||'Alle Ausgaben',data:data.map(d=>Math.abs(d.total)),borderColor:'#0052FF',backgroundColor:'rgba(0,82,255,.06)',fill:true,tension:0.3,pointRadius:4,pointBackgroundColor:'#0052FF',borderWidth:2}]},options:{maintainAspectRatio:false,plugins:{legend:{labels:{color:'#94A3B8',font:{size:11,family:'Inter'}}}},scales:{x:{ticks:{color:'#94A3B8',font:{size:11}},grid:{color:'rgba(226,232,240,.8)'}},y:{ticks:{color:'#4a5870',font:{size:11},callback:v=>v.toLocaleString('de-DE')+'€'},grid:{color:'rgba(226,232,240,.8)'}}}}});
+  loadStatsTx();
+}
+
+async function loadStatsTx() {
+  const cat   = document.getElementById('tl-cat').value;
+  const month = document.getElementById('stats-month').value;
+  const card  = document.getElementById('stats-tx-card');
+  if (!cat) { card.style.display = 'none'; return; }
+  card.style.display = 'block';
+  document.getElementById('stats-tx-label').textContent =
+    `Transaktionen — ${cat}${month ? ' · ' + month : ''}`;
+
+  let url = `/api/transactions?page=1&page_size=200&category=${encodeURIComponent(cat)}&sort=date&dir=desc`;
+  if (month) url += `&month=${encodeURIComponent(month)}`;
+
+  const data  = await api(url);
+  const sumEl = document.getElementById('stats-tx-sum');
+  if (sumEl && data.total_sum !== undefined) {
+    const s = data.total_sum;
+    sumEl.innerHTML = `${data.total} Einträge · Summe: <strong style="color:${s>=0?'var(--lime)':'var(--red)'}">${fmt(s)}</strong>`;
+  }
+
+  const tbody = document.getElementById('stats-tx-body');
+  if (!data.transactions.length) {
+    tbody.innerHTML = '<tr><td colspan="4" style="color:var(--text2);text-align:center;padding:20px">Keine Transaktionen</td></tr>';
+    return;
+  }
+  tbody.innerHTML = data.transactions.map(t => `
+    <tr>
+      <td style="color:var(--text2);white-space:nowrap">${t.date}</td>
+      <td>
+        <div style="font-weight:500">${esc(t.merchant_name||t.description?.slice(0,60)||'—')}</div>
+        ${t.merchant_name?`<div style="color:var(--text2);font-size:11.5px">${esc(t.description?.slice(0,70)||'')}</div>`:''}
+      </td>
+      <td style="color:var(--text3);font-size:12.5px">${t.source}</td>
+      <td style="text-align:right;white-space:nowrap" class="${t.amount<0?'amount-neg':'amount-pos'}">${fmt(t.amount)}</td>
+    </tr>`).join('');
 }
 async function loadYearly() {
   const year=document.getElementById('yr-year').value;
@@ -1700,18 +1786,41 @@ async function submitManual() {
 }
 
 // ── Import ─────────────────────────────────────────────────────────────────────
-async function uploadFile(bank,inp) {
-  const file=inp.files[0]; if (!file) return;
-  const msg=document.getElementById('msg-'+{comdirect:'cd',hanseaticbank:'hb'}[bank]);
-  msg.style.display='none';
-  const fd=new FormData(); fd.append('file',file);
+function updateImportUI() {
+  const src = document.getElementById('import-source').value;
+  const label = document.getElementById('dz-unified-label');
+  const icon  = document.getElementById('dz-unified-icon');
+  const hint  = document.getElementById('import-hint');
+  const inp   = document.getElementById('f-unified');
+  if (src === 'hanseaticbank') {
+    label.textContent = 'JSON-Datei hierher ziehen';
+    icon.textContent  = '📋';
+    hint.textContent  = 'JSON-Export der HanseaticBank (Browser-DevConsole)';
+    inp.accept = '.json';
+  } else {
+    label.textContent = 'CSV-Datei hierher ziehen';
+    icon.textContent  = '📄';
+    hint.textContent  = src === 'comdirect-cc'
+      ? 'CSV-Export Comdirect Kreditkarte'
+      : 'CSV-Export Comdirect Girokonto';
+    inp.accept = '.csv';
+  }
+}
+
+async function uploadUnified(inp) {
+  const file = inp.files[0]; if (!file) return;
+  const src  = document.getElementById('import-source').value;
+  const msg  = document.getElementById('msg-unified');
+  msg.style.display = 'none';
+  const bank = src === 'hanseaticbank' ? 'hanseaticbank' : 'comdirect';
+  const fd   = new FormData(); fd.append('file', file);
   try {
-    const d=await api(`/api/import/${bank}`,{method:'POST',body:fd});
-    showMsg(msg,'ok',`✓ ${d.inserted} importiert, ${d.skipped_duplicates} Duplikate`);
+    const d = await api(`/api/import/${bank}`, {method:'POST', body:fd});
+    showMsg(msg, 'ok', `✓ ${d.inserted} importiert, ${d.skipped_duplicates} Duplikate`);
     await refreshMonths();
     if (d.inserted > 0) checkSuggestions();
-  } catch(e){ showMsg(msg,'err','✗ '+e.message); }
-  inp.value='';
+  } catch(e) { showMsg(msg, 'err', '✗ '+e.message); }
+  inp.value = '';
 }
 async function restoreBackup(inp) {
   if (!confirm('Datenbank überschreiben? Alle Daten werden ersetzt!')) { inp.value=''; return; }
@@ -1864,12 +1973,12 @@ function showMsg(el,type,text) {
 }
 
 function setupDropZones() {
-  [['dz-cd','f-cd','comdirect'],['dz-hb','f-hb','hanseaticbank']].forEach(([dzId,fId,bank])=>{
-    const zone=document.getElementById(dzId),inp=document.getElementById(fId);
-    zone.addEventListener('dragover',e=>{e.preventDefault();zone.classList.add('over');});
-    zone.addEventListener('dragleave',()=>zone.classList.remove('over'));
-    zone.addEventListener('drop',e=>{e.preventDefault();zone.classList.remove('over');const dt=new DataTransfer();dt.items.add(e.dataTransfer.files[0]);inp.files=dt.files;uploadFile(bank,inp);});
-  });
+  const uz=document.getElementById('dz-unified'),ui=document.getElementById('f-unified');
+  if (uz&&ui) {
+    uz.addEventListener('dragover',e=>{e.preventDefault();uz.classList.add('over');});
+    uz.addEventListener('dragleave',()=>uz.classList.remove('over'));
+    uz.addEventListener('drop',e=>{e.preventDefault();uz.classList.remove('over');const dt=new DataTransfer();dt.items.add(e.dataTransfer.files[0]);ui.files=dt.files;uploadUnified(ui);});
+  }
   const rz=document.getElementById('dz-restore'),ri=document.getElementById('f-restore');
   rz.addEventListener('dragover',e=>{e.preventDefault();rz.classList.add('over');});
   rz.addEventListener('dragleave',()=>rz.classList.remove('over'));

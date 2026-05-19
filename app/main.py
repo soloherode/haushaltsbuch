@@ -151,6 +151,9 @@ def list_transactions(
     offset = (page - 1) * page_size
 
     total = conn.execute(f"SELECT COUNT(*) FROM transactions {where}", params).fetchone()[0]
+    sum_row = conn.execute(
+        f"SELECT SUM(amount) AS total_sum FROM transactions {where}", params
+    ).fetchone()
     rows = conn.execute(
         f"SELECT * FROM transactions {where} ORDER BY {order} LIMIT ? OFFSET ?",
         params + [page_size, offset]
@@ -159,6 +162,7 @@ def list_transactions(
     conn.close()
     return {
         "total": total,
+        "total_sum": round(sum_row["total_sum"] or 0, 2),
         "page": page,
         "page_size": page_size,
         "transactions": [dict(r) for r in rows],
