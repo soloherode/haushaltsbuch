@@ -4,11 +4,15 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Haushaltsbuch</title>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/d3-sankey@0.12.3/dist/d3-sankey.min.js"></script>
+<link rel="stylesheet" href="/static/fonts/fonts.css">
+<script defer src="/static/vendor/chart.umd.min.js"></script>
+<!-- Nur die d3-Module, die der Sankey braucht (statt des 280-KB-Vollbundles).
+     Reihenfolge zählt: jedes Modul hängt sich an das globale d3-Objekt. -->
+<script defer src="/static/vendor/d3-array.min.js"></script>
+<script defer src="/static/vendor/d3-path.min.js"></script>
+<script defer src="/static/vendor/d3-shape.min.js"></script>
+<script defer src="/static/vendor/d3-sankey.min.js"></script>
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap');
 
 :root {
   /* Surfaces */
@@ -514,6 +518,14 @@ th.sortable.desc::after { content: '↓'; opacity: .8; color: var(--lime); }
 
   <div class="nav-spacer"></div>
   <button class="nav-theme" onclick="toggleTheme()"><span id="theme-icon">☀</span><span id="theme-lbl">Hell</span></button>
+  <button class="nav-theme" onclick="changePassword()" title="Passwort ändern">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+    Passwort ändern
+  </button>
+  <button class="nav-theme" onclick="logout()" style="margin-bottom:10px">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+    Abmelden
+  </button>
 </nav>
 
 <!-- ── MOBILE HEADER ─────────────────────────────────────────────────────── -->
@@ -535,6 +547,7 @@ th.sortable.desc::after { content: '↓'; opacity: .8; color: var(--lime); }
   <a href="#" data-page="budget">Budgetziele</a>
   <a href="#" data-page="rules">Regeln & Kategorien</a>
   <a href="#" data-page="import">Import & Neu</a>
+  <a href="#" onclick="logout(); return false;">Abmelden</a>
 </div>
 
 <!-- ── MAIN ─────────────────────────────────────────────────────────────── -->
@@ -1099,6 +1112,7 @@ function navigate(page) {
   if (page === 'import')       loadSuspicious();
 }
 document.querySelectorAll('nav a, .mobile-menu a').forEach(a => a.addEventListener('click', e => {
+  if (!a.dataset.page) return;   // z. B. "Abmelden" im Mobil-Menü
   e.preventDefault();
   navigate(a.dataset.page);
 }));
@@ -1127,8 +1141,36 @@ const esc = s => (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g
 const fmtDiff = v => `<span class="${v>0?'negative':v<0?'positive':''}">${v>0?'+':''}${fmt(v)}</span>`;
 async function api(path, opts) {
   const r = await fetch(path, opts);
+  // Session abgelaufen oder abgemeldet → zurück zur Anmeldung
+  if (r.status === 401) { location.href = '/login'; throw new Error('Nicht angemeldet'); }
   if (!r.ok) throw new Error(await r.text());
   return r.json();
+}
+
+// ── Auth ───────────────────────────────────────────────────────────────────────
+async function logout() {
+  await fetch('/api/auth/logout', {method:'POST'});
+  location.href = '/login';
+}
+
+async function changePassword() {
+  const current = prompt('Aktuelles Passwort:');
+  if (!current) return;
+  const next = prompt('Neues Passwort (mind. 8 Zeichen):');
+  if (!next) return;
+  if (next.length < 8) { alert('Das Passwort muss mindestens 8 Zeichen haben.'); return; }
+  if (next !== prompt('Neues Passwort wiederholen:')) { alert('Die Passwörter stimmen nicht überein.'); return; }
+  const r = await fetch('/api/auth/change-password', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({current_password: current, new_password: next})
+  });
+  if (r.ok) {
+    alert('Passwort geändert. Alle Geräte wurden abgemeldet.');
+    location.href = '/login';
+  } else {
+    const d = await r.json().catch(()=>({}));
+    alert(d.detail || 'Passwort konnte nicht geändert werden.');
+  }
 }
 function popSel(sel, items, withAll=false) {
   const v = sel.value;
@@ -1985,7 +2027,9 @@ function setupDropZones() {
   rz.addEventListener('drop',e=>{e.preventDefault();rz.classList.remove('over');const dt=new DataTransfer();dt.items.add(e.dataTransfer.files[0]);ri.files=dt.files;restoreBackup(ri);});
 }
 
-init();
+// Die Vendor-Skripte laufen mit defer, also garantiert vor DOMContentLoaded –
+// erst danach stehen Chart und d3 bereit.
+document.addEventListener('DOMContentLoaded', init);
 </script>
 </body>
 </html>

@@ -6,10 +6,13 @@ import re
 import sqlite3
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, Query
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi import FastAPI, UploadFile, File, HTTPException, Query, Request, Response
+from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 
+from app import auth
 from app.database import init_db, get_db, DB_PATH
 from app.categories import CATEGORIES
 from app.parsers.comdirect import parse_comdirect_csv
@@ -24,19 +27,185 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Haushaltsbuch", lifespan=lifespan)
 
+# index.html sind ~100 KB unkomprimiert, gzipped ~22 KB. Über WLAN vom Pi
+# ist das der größte Einzelgewinn beim Seitenaufbau.
+app.add_middleware(GZipMiddleware, minimum_size=1000)
+
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+_PAGE_CACHE: dict[str, str] = {}
+
+
+def _page(name: str) -> str:
+    # Einmal von der SD-Karte lesen, danach aus dem RAM.
+    if name not in _PAGE_CACHE:
+        with open(os.path.join(STATIC_DIR, name), encoding="utf-8") as f:
+            _PAGE_CACHE[name] = f.read()
+    return _PAGE_CACHE[name]
+
+
+# ─── Authentifizierung ─────────────────────────────────────────────────────────
+
+# Ohne Session erreichbar: die Login-Seite selbst, die Auth-Endpoints und die
+# statischen Assets (Fonts/CSS, die die Login-Seite braucht – nichts Sensibles).
+PUBLIC_PATHS = {"/login", "/api/auth/status", "/api/auth/login", "/api/auth/setup"}
+PUBLIC_PREFIXES = ("/static/",)
+
+
+@app.middleware("http")
+async def require_login(request: Request, call_next):
+    path = request.url.path
+    if path in PUBLIC_PATHS or path.startswith(PUBLIC_PREFIXES):
+        return await call_next(request)
+
+    token = request.cookies.get(auth.COOKIE_NAME)
+    # sqlite blockiert – nicht im Event-Loop ausführen.
+    if await run_in_threadpool(auth.validate_session, token):
+        return await call_next(request)
+
+    if path.startswith("/api/"):
+        return JSONResponse({"detail": "Nicht angemeldet"}, status_code=401)
+    return RedirectResponse("/login", status_code=302)
+
+
+def _client_id(request: Request) -> str:
+    return request.client.host if request.client else "unbekannt"
+
+
+def _set_session_cookie(response: Response, token: str, max_age: int) -> None:
+    response.set_cookie(
+        auth.COOKIE_NAME,
+        token,
+        max_age=max_age,
+        httponly=True,          # kein Zugriff aus JavaScript
+        samesite="lax",         # blockt Cookies bei Cross-Site-POSTs → CSRF-Schutz
+        secure=False,           # das Heimnetz läuft über HTTP; mit HTTPS auf True setzen
+        path="/",
+    )
+
+
+@app.get("/login", response_class=HTMLResponse)
+def login_page(request: Request):
+    if auth.validate_session(request.cookies.get(auth.COOKIE_NAME)):
+        return RedirectResponse("/", status_code=302)
+    return HTMLResponse(_page("login.html"))
+
+
+@app.get("/api/auth/status")
+def auth_status(request: Request):
+    return {
+        "configured": auth.is_configured(),
+        "authenticated": auth.validate_session(request.cookies.get(auth.COOKIE_NAME)),
+    }
+
+
+@app.post("/api/auth/setup")
+def auth_setup(body: dict, response: Response):
+    """Erstmaliges Setzen des Passworts. Danach dauerhaft gesperrt."""
+    if auth.is_configured():
+        raise HTTPException(409, "Es ist bereits ein Passwort gesetzt")
+    password = str(body.get("password", ""))
+    if len(password) < auth.MIN_PASSWORD_LENGTH:
+        raise HTTPException(400, f"Passwort muss mindestens {auth.MIN_PASSWORD_LENGTH} Zeichen haben")
+    conn = get_db()
+    try:
+        auth.set_password(conn, password)
+        conn.commit()
+    finally:
+        conn.close()
+    token, max_age = auth.create_session(remember=False)
+    _set_session_cookie(response, token, max_age)
+    return {"ok": True}
+
+
+@app.post("/api/auth/login")
+def auth_login(body: dict, request: Request, response: Response):
+    client = _client_id(request)
+    blocked_for = auth.login_blocked(client)
+    if blocked_for:
+        raise HTTPException(429, f"Zu viele Fehlversuche. Bitte {blocked_for // 60 + 1} Minuten warten.")
+
+    conn = get_db()
+    try:
+        stored = auth.get_password_hash(conn)
+    finally:
+        conn.close()
+    if not stored:
+        raise HTTPException(409, "Es ist noch kein Passwort gesetzt")
+
+    if not auth.verify_password(str(body.get("password", "")), stored):
+        auth.record_failed_login(client)
+        raise HTTPException(401, "Falsches Passwort")
+
+    auth.reset_failed_logins(client)
+    token, max_age = auth.create_session(remember=bool(body.get("remember")))
+    _set_session_cookie(response, token, max_age)
+    return {"ok": True}
+
+
+@app.post("/api/auth/logout")
+def auth_logout(request: Request, response: Response):
+    auth.delete_session(request.cookies.get(auth.COOKIE_NAME))
+    response.delete_cookie(auth.COOKIE_NAME, path="/")
+    return {"ok": True}
+
+
+@app.post("/api/auth/change-password")
+def auth_change_password(body: dict, response: Response):
+    new = str(body.get("new_password", ""))
+    if len(new) < auth.MIN_PASSWORD_LENGTH:
+        raise HTTPException(400, f"Passwort muss mindestens {auth.MIN_PASSWORD_LENGTH} Zeichen haben")
+    conn = get_db()
+    try:
+        stored = auth.get_password_hash(conn)
+        if not stored or not auth.verify_password(str(body.get("current_password", "")), stored):
+            raise HTTPException(401, "Aktuelles Passwort ist falsch")
+        auth.set_password(conn, new)
+        conn.commit()
+    finally:
+        conn.close()
+    # Alle Geräte abmelden – auch das hier gerade benutzte.
+    auth.delete_all_sessions()
+    response.delete_cookie(auth.COOKIE_NAME, path="/")
+    return {"ok": True}
 
 
 # ─── Root ──────────────────────────────────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse)
 def root():
-    with open(os.path.join(STATIC_DIR, "index.html"), encoding="utf-8") as f:
-        return f.read()
+    return _page("index.html")
 
 
 # ─── Helpers ───────────────────────────────────────────────────────────────────
+
+MONTH_RE = re.compile(r"^\d{4}-\d{2}$")
+YEAR_RE = re.compile(r"^\d{4}$")
+
+
+def _month_range(month: str) -> list[str]:
+    """'2026-04' → ['2026-04-01', '2026-05-01'] (halboffen).
+
+    Als Bereichsvergleich statt LIKE 'YYYY-MM%', damit SQLite idx_transactions_date
+    nutzen kann – LIKE erzwingt sonst einen Full Table Scan.
+    """
+    if not MONTH_RE.match(month):
+        raise HTTPException(400, "Monat muss im Format YYYY-MM sein")
+    year, mon = int(month[:4]), int(month[5:])
+    if not 1 <= mon <= 12:
+        raise HTTPException(400, f"Ungültiger Monat: {month}")
+    next_year, next_mon = (year + 1, 1) if mon == 12 else (year, mon + 1)
+    return [f"{year:04d}-{mon:02d}-01", f"{next_year:04d}-{next_mon:02d}-01"]
+
+
+def _year_range(year: str) -> list[str]:
+    """'2026' → ['2026-01-01', '2027-01-01'] (halboffen)."""
+    if not YEAR_RE.match(year):
+        raise HTTPException(400, "Jahr muss im Format YYYY sein")
+    y = int(year)
+    return [f"{y:04d}-01-01", f"{y + 1:04d}-01-01"]
+
 
 def _apply_db_rules(description: str, merchant: str, conn) -> str | None:
     """Check user-defined rules in DB; return category or None."""
@@ -141,8 +310,8 @@ def list_transactions(
         conditions.append("source = ?")
         params.append(source)
     if month:
-        conditions.append("date LIKE ?")
-        params.append(f"{month}%")
+        conditions.append("date >= ? AND date < ?")
+        params += _month_range(month)
     if search:
         conditions.append("(description LIKE ? OR merchant_name LIKE ?)")
         params += [f"%{search}%", f"%{search}%"]
@@ -341,16 +510,19 @@ def apply_rules_to_all():
 @app.get("/api/stats/summary")
 def stats_summary(month: str = Query(None)):
     conn = get_db()
-    where = "WHERE date LIKE ?" if month else ""
-    params = [f"{month}%"] if month else []
+    if month:
+        where = "WHERE date >= ? AND date < ? AND category != 'Überweisung'"
+        params = _month_range(month)
+    else:
+        where = "WHERE category != 'Überweisung'"
+        params = []
 
-    excl = "AND category != 'Überweisung'"
     row = conn.execute(f"""
         SELECT
             SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END) AS income,
             SUM(CASE WHEN amount < 0 THEN amount ELSE 0 END) AS expenses,
             COUNT(*) AS count
-        FROM transactions {where} {excl}
+        FROM transactions {where}
     """, params).fetchone()
 
     conn.close()
@@ -367,8 +539,8 @@ def stats_categories(month: str = Query(None), type: str = Query("expense")):
     conn = get_db()
     amount_filter = "amount > 0" if type == "income" else "amount < 0"
     if month:
-        where = f"WHERE date LIKE ? AND {amount_filter} AND category != 'Überweisung'"
-        params = [f"{month}%"]
+        where = f"WHERE date >= ? AND date < ? AND {amount_filter} AND category != 'Überweisung'"
+        params = _month_range(month)
     else:
         where = f"WHERE {amount_filter} AND category != 'Überweisung'"
         params = []
@@ -421,7 +593,12 @@ def stats_timeline(category: str = Query(None)):
 @app.get("/api/stats/yearly")
 def stats_yearly(year: str = Query(None)):
     conn = get_db()
-    where = f"WHERE date LIKE '{year}%' AND category != 'Überweisung'" if year else "WHERE date != '0000-00-00' AND category != 'Überweisung'"
+    if year:
+        where = "WHERE date >= ? AND date < ? AND category != 'Überweisung'"
+        params = _year_range(year)
+    else:
+        where = "WHERE date != '0000-00-00' AND category != 'Überweisung'"
+        params = []
     rows = conn.execute(f"""
         SELECT substr(date, 1, 7) AS month,
                SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END) AS income,
@@ -429,7 +606,7 @@ def stats_yearly(year: str = Query(None)):
                SUM(CASE WHEN category = 'Sparen & Investieren' THEN ABS(amount) ELSE 0 END) AS savings
         FROM transactions {where}
         GROUP BY month ORDER BY month
-    """).fetchall()
+    """, params).fetchall()
     conn.close()
     result = []
     for r in rows:
@@ -469,9 +646,10 @@ def stats_comparison(month: str = Query(None)):
     def get_cats(m):
         rows = conn.execute("""
             SELECT category, SUM(ABS(amount)) AS total
-            FROM transactions WHERE date LIKE ? AND amount < 0 AND category != 'Überweisung'
+            FROM transactions
+            WHERE date >= ? AND date < ? AND amount < 0 AND category != 'Überweisung'
             GROUP BY category
-        """, [f"{m}%"]).fetchall()
+        """, _month_range(m)).fetchall()
         return {r["category"]: r["total"] for r in rows}
 
     def get_avg(cat):
@@ -686,9 +864,9 @@ def budget_status(month: str = Query(None)):
     spending = {r["category"]: abs(r["total"]) for r in conn.execute("""
         SELECT category, SUM(amount) AS total
         FROM transactions
-        WHERE date LIKE ? AND amount < 0 AND category != 'Überweisung'
+        WHERE date >= ? AND date < ? AND amount < 0 AND category != 'Überweisung'
         GROUP BY category
-    """, [f"{month}%"]).fetchall()}
+    """, _month_range(month)).fetchall()}
 
     conn.close()
 
@@ -780,8 +958,8 @@ def list_months():
 @app.get("/api/export/csv")
 def export_csv(month: str = Query(None)):
     conn = get_db()
-    where = "WHERE date LIKE ?" if month else ""
-    params = [f"{month}%"] if month else []
+    where = "WHERE date >= ? AND date < ?" if month else ""
+    params = _month_range(month) if month else []
     rows = conn.execute(
         f"SELECT date, merchant_name, description, category, amount, source, account_name, note FROM transactions {where} ORDER BY date DESC",
         params

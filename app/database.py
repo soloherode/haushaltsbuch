@@ -25,12 +25,22 @@ DEFAULT_CATEGORIES = [
 def get_db():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
+    # journal_mode ist in der DB-Datei persistiert und wird einmalig in init_db()
+    # gesetzt – hier nur die Pragmas, die pro Verbindung gelten.
+    #
+    # synchronous=NORMAL ist zusammen mit WAL crash-sicher (ein Absturz kann die
+    # letzte Transaktion kosten, die DB aber nicht beschädigen) und spart pro
+    # Commit einen fsync. Auf der SD-Karte eines Pi ist das der Unterschied
+    # zwischen "spürbar träge" und "sofort" – und deutlich weniger Schreiblast.
+    conn.execute("PRAGMA synchronous=NORMAL")
+    # Statt sofortigem "database is locked", wenn ein Import parallel schreibt.
+    conn.execute("PRAGMA busy_timeout=5000")
     return conn
 
 
 def init_db():
     conn = get_db()
+    conn.execute("PRAGMA journal_mode=WAL")
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS transactions (
             id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -85,6 +95,14 @@ def init_db():
             key   TEXT PRIMARY KEY,
             value TEXT
         );
+
+        CREATE TABLE IF NOT EXISTS sessions (
+            token_hash TEXT PRIMARY KEY,
+            created_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
     """)
     conn.commit()
 
