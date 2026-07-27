@@ -21,6 +21,17 @@ DEFAULT_CATEGORIES = [
     "Sonstiges",
 ]
 
+# Arten: income = Geldzufluss, consumption = echter Verbrauch,
+# savings = zur Seite gelegt (keine Ausgabe im Sinne von Konsum),
+# transfer = reine Umbuchung zwischen eigenen Konten, zählt nirgends mit.
+VALID_KINDS = ("income", "consumption", "savings", "transfer")
+
+CATEGORY_KINDS = {
+    "Einkommen":            "income",
+    "Sparen & Investieren": "savings",
+    "Überweisung":          "transfer",
+}
+
 
 def get_db():
     conn = sqlite3.connect(DB_PATH)
@@ -109,12 +120,23 @@ def init_db():
     # Migrations
     for stmt in [
         "ALTER TABLE transactions ADD COLUMN note TEXT",
+        # Art der Kategorie: trennt echten Konsum von Sparen und reinen
+        # Umbuchungen, damit die Ausgaben-Kennzahl nicht Sparraten mitzählt.
+        "ALTER TABLE categories ADD COLUMN kind TEXT NOT NULL DEFAULT 'consumption'",
     ]:
         try:
             conn.execute(stmt)
             conn.commit()
         except Exception:
             pass
+
+    # Startbelegung der Arten – nur für die bekannten Standardkategorien und
+    # nur einmalig, danach entscheidet der Nutzer.
+    if not conn.execute("SELECT value FROM settings WHERE key = 'kinds_seeded'").fetchone():
+        for name, kind in CATEGORY_KINDS.items():
+            conn.execute("UPDATE categories SET kind = ? WHERE name = ?", (kind, name))
+        conn.execute("INSERT INTO settings (key, value) VALUES ('kinds_seeded', '1')")
+        conn.commit()
 
     # Migrate old user_categories into new categories table
     try:

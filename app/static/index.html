@@ -179,6 +179,27 @@ button.danger:hover { background: rgba(239,68,68,.13); transform: translateY(-1p
 
 /* ── KPI row ── */
 .kpi-row { display: grid; grid-template-columns: repeat(3,1fr); gap: 16px; margin-bottom: 16px; }
+.kpi-row-4 { grid-template-columns: repeat(4,1fr); }
+@media (max-width: 1100px) { .kpi-row-4 { grid-template-columns: repeat(2,1fr); } }
+
+/* ── Ausreißer & Zeitraum ── */
+.badge-out {
+  display: inline-flex; align-items: center; gap: 4px; margin-left: 6px;
+  padding: 1px 6px; border-radius: 6px; font-size: 10px; font-weight: 600;
+  background: rgba(249,115,22,.12); color: var(--orange);
+  border: 1px solid rgba(249,115,22,.25); white-space: nowrap;
+}
+tr.is-outlier td:first-child { box-shadow: inset 3px 0 0 var(--orange); }
+.toggle {
+  display: inline-flex; align-items: center; gap: 7px; font-size: 13px;
+  color: var(--text2); cursor: pointer; user-select: none; white-space: nowrap;
+}
+.toggle input { accent-color: var(--blue); width: 15px; height: 15px; cursor: pointer; }
+.period-note { font-size: 12px; color: var(--text3); margin-left: 2px; }
+.trend-up   { color: var(--red); }
+.trend-down { color: var(--lime); }
+/* Beträge nie umbrechen – die Tabelle scrollt stattdessen in ihrem Rahmen. */
+#cmp-body td, #abo-body td, #aus-body td { white-space: nowrap; }
 .kpi {
   background: var(--surface); border: 1px solid var(--border);
   border-radius: var(--r2); padding: 22px 26px;
@@ -203,6 +224,7 @@ button.danger:hover { background: rgba(239,68,68,.13); transform: translateY(-1p
 .kpi-dot.red    { background: var(--red); }
 .kpi-dot.blue   { background: var(--blue); }
 .kpi-dot.teal   { background: var(--teal); }
+.kpi-dot.orange { background: var(--orange); }
 
 /* ── Sparquote hero (inverted dark section) ── */
 .sq-hero {
@@ -353,8 +375,8 @@ tr:hover td { background: rgba(0,82,255,.025); }
 .sh:first-child { margin-top: 0; }
 
 /* ── Tabs ── */
-.tabs { display: flex; gap: 4px; background: var(--sur2); border: 1px solid var(--border); border-radius: 12px; padding: 4px; width: fit-content; margin-bottom: 24px; box-shadow: var(--sh-sm); }
-.tab { padding: 8px 18px; border-radius: 9px; cursor: pointer; font-size: 13px; font-weight: 500; color: var(--text2); border: none; background: none; font-family: inherit; transition: all .18s; box-shadow: none; }
+.tabs { display: flex; gap: 4px; background: var(--sur2); border: 1px solid var(--border); border-radius: 12px; padding: 4px; width: fit-content; max-width: 100%; margin-bottom: 24px; box-shadow: var(--sh-sm); overflow-x: auto; scrollbar-width: thin; }
+.tab { padding: 8px 18px; border-radius: 9px; cursor: pointer; font-size: 13px; font-weight: 500; color: var(--text2); border: none; background: none; font-family: inherit; transition: all .18s; box-shadow: none; white-space: nowrap; flex: 0 0 auto; }
 .tab:hover { color: var(--text); background: var(--surface); transform: none; }
 .tab.active { background: var(--grad); color: #fff; font-weight: 600; box-shadow: var(--sh-acc); }
 .tab-pane { display: none; }
@@ -561,12 +583,12 @@ th.sortable.desc::after { content: '↓'; opacity: .8; color: var(--lime); }
     </div>
 
     <div class="toolbar">
-      <select id="dash-month"></select>
+      <select id="dash-period"></select>
       <button onclick="openEntryModal()" style="margin-left:auto">+ Eintrag</button>
     </div>
 
     <!-- KPIs -->
-    <div class="kpi-row">
+    <div class="kpi-row kpi-row-4">
       <div class="kpi">
         <div class="kpi-dot lime"></div>
         <div class="kpi-label">Einnahmen</div>
@@ -575,9 +597,15 @@ th.sortable.desc::after { content: '↓'; opacity: .8; color: var(--lime); }
       </div>
       <div class="kpi">
         <div class="kpi-dot red"></div>
-        <div class="kpi-label">Ausgaben</div>
-        <div class="kpi-value red" id="sum-expenses">—</div>
+        <div class="kpi-label">Konsum</div>
+        <div class="kpi-value red" id="sum-consumption">—</div>
         <div class="kpi-sub" id="kpi-expense-sub"></div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-dot teal"></div>
+        <div class="kpi-label">Sparen</div>
+        <div class="kpi-value teal" id="sum-savings">—</div>
+        <div class="kpi-sub" id="kpi-savings-sub"></div>
       </div>
       <div class="kpi">
         <div class="kpi-dot blue"></div>
@@ -672,7 +700,7 @@ th.sortable.desc::after { content: '↓'; opacity: .8; color: var(--lime); }
     </div>
 
     <div class="toolbar">
-      <select id="tx-month"><option value="">Alle Monate</option></select>
+      <select id="tx-period"></select>
       <select id="tx-cat"><option value="">Alle Kategorien</option></select>
       <select id="tx-src">
         <option value="">Alle Konten</option>
@@ -681,6 +709,7 @@ th.sortable.desc::after { content: '↓'; opacity: .8; color: var(--lime); }
         <option value="manual">Manuell</option>
       </select>
       <input type="text" id="tx-search" placeholder="Suchen…" style="width:180px">
+      <label class="toggle"><input type="checkbox" id="tx-onlyout" onchange="loadTx()"> nur Ausreißer</label>
       <button onclick="loadTx()">Filtern</button>
       <button class="sec" onclick="openEntryModal()">+ Hinzufügen</button>
       <button class="sec" onclick="exportCsv()" style="margin-left:auto">⬇ CSV</button>
@@ -727,12 +756,15 @@ th.sortable.desc::after { content: '↓'; opacity: .8; color: var(--lime); }
       <button class="tab" onclick="switchTab('jahr')">Jahresübersicht</button>
       <button class="tab" onclick="switchTab('vgl')">Vergleich</button>
       <button class="tab" onclick="switchTab('abo')">Wiederkehrend</button>
+      <button class="tab" onclick="switchTab('verm')">Vermögensaufbau</button>
+      <button class="tab" onclick="switchTab('aus')">Ausreißer</button>
     </div>
 
     <!-- Kategorien -->
     <div class="tab-pane active" id="tab-kat">
       <div class="toolbar">
-        <select id="stats-month"></select>
+        <select id="stats-period"></select>
+        <label class="toggle"><input type="checkbox" id="stats-nooutlier"> Ausreißer ausblenden</label>
       </div>
       <div class="sh">Ausgaben</div>
       <div class="charts-grid">
@@ -748,6 +780,7 @@ th.sortable.desc::after { content: '↓'; opacity: .8; color: var(--lime); }
         <div class="card-label">Timeline nach Kategorie</div>
         <div class="toolbar" style="margin-top:12px;margin-bottom:0">
           <select id="tl-cat"><option value="">Alle Ausgaben</option></select>
+          <span class="period-note" id="tl-note"></span>
         </div>
         <div class="chart-tall"><canvas id="chart-tl"></canvas></div>
       </div>
@@ -774,13 +807,13 @@ th.sortable.desc::after { content: '↓'; opacity: .8; color: var(--lime); }
     <!-- Jahresübersicht -->
     <div class="tab-pane" id="tab-jahr">
       <div class="toolbar">
-        <select id="yr-year"></select>
+        <select id="yr-period"></select>
         <button onclick="loadYearly()">Laden</button>
       </div>
       <div class="card">
         <div class="table-wrap">
           <table class="yr">
-            <thead><tr><th>Monat</th><th>Einnahmen</th><th>Ausgaben</th><th>Bilanz</th><th>Gespart</th><th>Sparquote</th></tr></thead>
+            <thead><tr><th>Monat</th><th>Einnahmen</th><th>Konsum</th><th>Gespart</th><th>Bilanz</th><th>Sparquote</th></tr></thead>
             <tbody id="yr-body"></tbody>
             <tfoot id="yr-foot"></tfoot>
           </table>
@@ -791,8 +824,12 @@ th.sortable.desc::after { content: '↓'; opacity: .8; color: var(--lime); }
     <!-- Vergleich -->
     <div class="tab-pane" id="tab-vgl">
       <div class="toolbar">
-        <select id="cmp-month"></select>
+        <select id="cmp-period"></select>
+        <label class="toggle"><input type="checkbox" id="cmp-nooutlier"> Ausreißer ausblenden</label>
         <button onclick="loadComparison()">Vergleichen</button>
+      </div>
+      <div class="card" style="margin-bottom:16px">
+        <p style="color:var(--text3);font-size:13px" id="cmp-note"></p>
       </div>
       <div class="card">
         <div class="table-wrap">
@@ -800,10 +837,12 @@ th.sortable.desc::after { content: '↓'; opacity: .8; color: var(--lime); }
             <thead><tr>
               <th>Kategorie</th>
               <th style="text-align:right">Aktuell</th>
-              <th style="text-align:right">Vormonat</th>
+              <th style="text-align:right">Vorzeitraum</th>
               <th style="text-align:right">Diff.</th>
-              <th style="text-align:right">12M-Ø</th>
-              <th style="text-align:right">Diff. Ø</th>
+              <th style="text-align:right" title="Mittlerer Monatswert – robust gegen einzelne Ausreißer">Median/Monat</th>
+              <th style="text-align:right" title="Durchschnitt der letzten 3 Monate">gleit. Ø</th>
+              <th style="text-align:right">vs. Median</th>
+              <th style="text-align:right" title="Veränderung pro Monat aus der Regression">Trend</th>
             </tr></thead>
             <tbody id="cmp-body"></tbody>
           </table>
@@ -811,13 +850,68 @@ th.sortable.desc::after { content: '↓'; opacity: .8; color: var(--lime); }
       </div>
     </div>
 
-    <!-- Wiederkehrend -->
-    <div class="tab-pane" id="tab-abo">
-      <div class="card" style="margin-bottom:16px"><p style="color:var(--text3);font-size:13px">Händler die in ≥ 2 Monaten gebucht wurden — mögliche Abos & Fixkosten.</p></div>
+    <!-- Vermögensaufbau -->
+    <div class="tab-pane" id="tab-verm">
+      <div class="toolbar"><select id="verm-period"></select></div>
+      <div class="kpi-row kpi-row-4">
+        <div class="kpi"><div class="kpi-dot teal"></div><div class="kpi-label">Gespart gesamt</div>
+          <div class="kpi-value teal" id="w-total">—</div><div class="kpi-sub" id="w-total-sub"></div></div>
+        <div class="kpi"><div class="kpi-dot blue"></div><div class="kpi-label">Ø pro Monat</div>
+          <div class="kpi-value blue" id="w-avg">—</div></div>
+        <div class="kpi"><div class="kpi-dot lime"></div><div class="kpi-label">Median-Sparquote</div>
+          <div class="kpi-value lime" id="w-rate">—</div><div class="kpi-sub" id="w-rate-sub"></div></div>
+        <div class="kpi"><div class="kpi-dot red"></div><div class="kpi-label">Ziel erreicht</div>
+          <div class="kpi-value" id="w-goal">—</div><div class="kpi-sub" id="w-goal-sub"></div></div>
+      </div>
+      <div class="card full">
+        <div class="card-label">Kumulierte Sparsumme</div>
+        <div class="chart-tall"><canvas id="chart-wealth"></canvas></div>
+      </div>
+      <div class="card full">
+        <div class="card-label">Sparquote je Monat</div>
+        <div class="chart-tall"><canvas id="chart-wrate"></canvas></div>
+      </div>
+    </div>
+
+    <!-- Ausreißer -->
+    <div class="tab-pane" id="tab-aus">
+      <div class="toolbar"><select id="aus-period"></select></div>
+      <div class="card" style="margin-bottom:16px">
+        <p style="color:var(--text3);font-size:13px" id="aus-note"></p>
+      </div>
       <div class="card">
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Händler</th><th>Kategorie</th><th>Typ</th><th style="text-align:right">Ø Betrag</th><th style="text-align:right">Monate</th><th>Erster</th><th>Letzter</th></tr></thead>
+            <thead><tr><th>Datum</th><th>Händler / Beschreibung</th><th>Kategorie</th>
+              <th style="text-align:right">Betrag</th><th style="text-align:right">Schwelle</th>
+              <th style="text-align:right">Faktor</th></tr></thead>
+            <tbody id="aus-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Wiederkehrend -->
+    <div class="tab-pane" id="tab-abo">
+      <div class="kpi-row kpi-row-4">
+        <div class="kpi"><div class="kpi-dot red"></div><div class="kpi-label">Fixkosten</div>
+          <div class="kpi-value red" id="abo-fix">—</div><div class="kpi-sub" id="abo-fix-sub"></div></div>
+        <div class="kpi"><div class="kpi-dot orange"></div><div class="kpi-label">Variabel wiederkehrend</div>
+          <div class="kpi-value" id="abo-var" style="color:var(--orange)">—</div><div class="kpi-sub">pro Monat</div></div>
+        <div class="kpi"><div class="kpi-dot teal"></div><div class="kpi-label">Sparpläne</div>
+          <div class="kpi-value teal" id="abo-sav">—</div><div class="kpi-sub">pro Monat, keine Kosten</div></div>
+        <div class="kpi"><div class="kpi-dot blue"></div><div class="kpi-label">Preiserhöhungen</div>
+          <div class="kpi-value blue" id="abo-inc">—</div><div class="kpi-sub">bei festen Abos</div></div>
+      </div>
+      <div class="card" style="margin-bottom:16px"><p style="color:var(--text3);font-size:13px">Händler mit Buchungen in mindestens zwei Monaten. „Fix“ = Betrag schwankt unter 5 %.</p></div>
+      <div class="card">
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Händler</th><th>Kategorie</th><th>Typ</th>
+              <th style="text-align:right">Median</th>
+              <th style="text-align:right">pro Monat</th>
+              <th style="text-align:right">pro Jahr</th>
+              <th>nächste</th><th>Preisänderung</th></tr></thead>
             <tbody id="abo-body"></tbody>
           </table>
         </div>
@@ -841,7 +935,7 @@ th.sortable.desc::after { content: '↓'; opacity: .8; color: var(--lime); }
     <div class="card" style="margin-bottom:28px">
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Name</th><th>Typ</th><th style="width:140px"></th></tr></thead>
+          <thead><tr><th>Name</th><th>Typ</th><th style="width:200px">Zählt als</th><th style="width:140px"></th></tr></thead>
           <tbody id="cats-body"></tbody>
         </table>
       </div>
@@ -948,7 +1042,7 @@ th.sortable.desc::after { content: '↓'; opacity: .8; color: var(--lime); }
       <p>Setze monatliche Obergrenzen pro Kategorie</p>
     </div>
     <div class="toolbar">
-      <select id="budget-month"></select>
+      <select id="budget-period"></select>
       <button onclick="loadBudget()">Laden</button>
     </div>
     <div class="kpi-row" style="margin-bottom:24px" id="budget-kpis"></div>
@@ -1133,6 +1227,8 @@ function switchTab(name) {
   if (name === 'jahr') loadYearly();
   if (name === 'vgl')  loadComparison();
   if (name === 'abo')  loadRecurring();
+  if (name === 'verm') loadWealth();
+  if (name === 'aus')  loadOutliers();
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -1178,25 +1274,74 @@ function popSel(sel, items, withAll=false) {
   items.forEach(m => { const o=document.createElement('option'); o.value=m; o.textContent=m; sel.appendChild(o); });
   if (v) sel.value = v;
 }
+
+// ── Zeitraum-Selektor ──────────────────────────────────────────────────────────
+// Baut aus den vorhandenen Datenmonaten die Auswahl: rollierende Fenster,
+// Jahre, Quartale und Einzelmonate. Der Wert geht 1:1 als ?period= ans Backend.
+const MONAT = ['Januar','Februar','März','April','Mai','Juni',
+               'Juli','August','September','Oktober','November','Dezember'];
+
+function periodGroups(monthList) {
+  const jahre = [...new Set(monthList.map(m => m.slice(0,4)))].sort().reverse();
+  const quartale = [...new Set(monthList.map(m => {
+    const q = Math.floor((parseInt(m.slice(5,7)) - 1) / 3) + 1;
+    return `${m.slice(0,4)}-Q${q}`;
+  }))].sort().reverse();
+  return [
+    ['Zeitfenster', [['r3','letzte 3 Monate'], ['r6','letzte 6 Monate'], ['r12','letzte 12 Monate']]],
+    ['Jahre',       jahre.map(y => [y, y])],
+    ['Quartale',    quartale.map(q => [q, q.replace('-Q',' · Q')])],
+    ['Monate',      monthList.map(m => [m, `${MONAT[parseInt(m.slice(5,7))-1]} ${m.slice(0,4)}`])],
+  ].filter(([, items]) => items.length);
+}
+
+function popPeriodSel(sel, monthList, dflt) {
+  if (!sel) return;
+  const keep = sel.value;
+  sel.innerHTML = '<option value="all">Gesamter Zeitraum</option>';
+  for (const [label, items] of periodGroups(monthList)) {
+    const g = document.createElement('optgroup');
+    g.label = label;
+    for (const [value, text] of items) {
+      const o = document.createElement('option');
+      o.value = value; o.textContent = text;
+      g.appendChild(o);
+    }
+    sel.appendChild(g);
+  }
+  const wanted = keep || dflt;
+  if (wanted && [...sel.options].some(o => o.value === wanted)) sel.value = wanted;
+}
+
+const PERIOD_SELECTS = ['dash-period','stats-period','tx-period','cmp-period',
+                        'budget-period','yr-period','verm-period','aus-period'];
+
+function fillPeriodSelects() {
+  const newest = months[0] || '';
+  // Sinnvolle Startwerte je Ansicht: Vermögensaufbau und Ausreißer über alles,
+  // Jahresübersicht auf dem aktuellen Jahr, der Rest auf dem jüngsten Monat.
+  const defaults = {
+    'yr-period':   newest.slice(0,4),
+    'verm-period': 'all',
+    'aus-period':  'all',
+    'tx-period':   'all',
+  };
+  PERIOD_SELECTS.forEach(id =>
+    popPeriodSel(document.getElementById(id), months, defaults[id] ?? newest));
+}
+
+const periodOf = id => document.getElementById(id)?.value || 'all';
+
 async function refreshMonths() {
   months = await api('/api/months');
-  ['dash-month','stats-month','tx-month','cmp-month','budget-month'].forEach(id => {
-    const sel = document.getElementById(id);
-    if (sel) popSel(sel, months, id==='tx-month' || id==='cmp-month');
-  });
+  fillPeriodSelects();
 }
 
 // ── Init ───────────────────────────────────────────────────────────────────────
 async function init() {
   [categories, months] = await Promise.all([api('/api/categories'), api('/api/months')]);
 
-  ['dash-month','stats-month','budget-month'].forEach(id => popSel(document.getElementById(id), months));
-  ['tx-month','cmp-month'].forEach(id => popSel(document.getElementById(id), months, true));
-
-  const yrSel = document.getElementById('yr-year');
-  [...new Set(months.map(m=>m.slice(0,4)))].forEach(y => {
-    const o=document.createElement('option'); o.value=y; o.textContent=y; yrSel.appendChild(o);
-  });
+  fillPeriodSelects();
 
   ['tx-cat','tl-cat','m-cat','rule-cat','batch-cat'].forEach(id => {
     const sel = document.getElementById(id); if (!sel) return;
@@ -1206,9 +1351,10 @@ async function init() {
   });
 
   document.getElementById('m-date').value = new Date().toISOString().slice(0,10);
-  document.getElementById('dash-month').addEventListener('change', loadDashboard);
-  document.getElementById('stats-month').addEventListener('change', loadStats);
+  document.getElementById('dash-period').addEventListener('change', loadDashboard);
+  document.getElementById('stats-period').addEventListener('change', loadStats);
   document.getElementById('tl-cat').addEventListener('change', loadTimeline);
+  document.getElementById('stats-nooutlier').addEventListener('change', loadStats);
 
   setupDropZones();
   loadDashboard();
@@ -1216,25 +1362,35 @@ async function init() {
 
 // ── Dashboard ──────────────────────────────────────────────────────────────────
 async function loadDashboard() {
-  const month = document.getElementById('dash-month').value;
-  const q = month ? `?month=${month}` : '';
+  const period = periodOf('dash-period');
+  const q = `?period=${encodeURIComponent(period)}`;
   const [summary, catData, incData, monthly, goalData] = await Promise.all([
     api('/api/stats/summary'+q),
     api('/api/stats/categories'+q),
-    api('/api/stats/categories'+(q?q+'&type=income':'?type=income')),
+    api('/api/stats/categories'+q+'&type=income'),
     api('/api/stats/monthly'),
     api('/api/settings/savings-goal'),
   ]);
 
-  document.getElementById('sum-income').textContent   = fmt(summary.income);
-  document.getElementById('sum-expenses').textContent = fmt(Math.abs(summary.expenses));
+  // Monatsschnitt über die Monate MIT Buchungen – ein angebrochenes Jahr durch
+  // zwölf zu teilen würde die Zahlen künstlich drücken.
+  const months = summary.active_months;
+  document.getElementById('sum-income').textContent      = fmt(summary.income);
+  document.getElementById('sum-consumption').textContent = fmt(summary.consumption);
+  document.getElementById('sum-savings').textContent     = fmt(summary.savings);
+  const perMonth = (v) => months > 1 ? `${fmt(v/months)} / Monat (${months} Mon.)` : '';
+  document.getElementById('kpi-income-sub').textContent  = perMonth(summary.income);
+  document.getElementById('kpi-expense-sub').textContent = perMonth(summary.consumption);
+  document.getElementById('kpi-savings-sub').textContent = perMonth(summary.savings);
   const balEl = document.getElementById('sum-balance');
   balEl.textContent = fmt(summary.balance);
   balEl.className = 'kpi-value ' + (summary.balance>=0?'lime':'red');
+  document.getElementById('kpi-balance-sub').textContent =
+    summary.transfers > 0 ? `${fmt(summary.transfers)} Umbuchungen ausgeklammert` : '';
 
-  // Sparquote
-  const sav = Math.abs((catData.find(c=>c.category==='Sparen & Investieren')||{}).total||0);
-  const sqPct = summary.income>0 ? (sav/summary.income)*100 : 0;
+  // Sparquote – kommt jetzt aus der Kategorie-Art, nicht mehr aus einem Namen
+  const sav = summary.savings;
+  const sqPct = summary.savings_rate;
   const goalPct = goalData.value ? parseFloat(goalData.value) : null;
   const goalMet = goalPct !== null && sqPct >= goalPct;
   const sqColor = goalPct !== null
@@ -1275,9 +1431,9 @@ async function loadDashboard() {
     hero.classList.remove('sq-goal-achieved');
   }
 
-  // Budget
-  const remaining = summary.income+summary.expenses;
-  const spent = Math.abs(summary.expenses);
+  // Was nach Konsum übrig bleibt (Sparen zählt hier nicht als Ausgabe)
+  const remaining = summary.income - summary.consumption;
+  const spent = summary.consumption;
   const budVal = document.getElementById('budget-val');
   budVal.textContent = fmt(remaining);
   budVal.style.color = remaining>=0?'var(--lime)':'var(--red)';
@@ -1331,6 +1487,13 @@ function renderSankey(summary, catData, incData) {
     nodes.push({name:c.category, type:'expense'});
     links.push({source:midIdx, target:idx, value:Math.abs(c.total)});
   });
+
+  // Sparen als eigener Ast – nicht mehr in den Ausgabekategorien enthalten
+  if (summary.savings > 0) {
+    const idx = nodes.length;
+    nodes.push({name:'Sparen & Investieren', type:'savings'});
+    links.push({source:midIdx, target:idx, value:summary.savings});
+  }
 
   // Remaining
   if (summary.balance>0) {
@@ -1501,15 +1664,16 @@ function renderMonthly(monthly) {
     data: {
       labels: sorted.map(m=>m.month),
       datasets: [
-        { label:'Einnahmen', data:sorted.map(m=>m.income),            backgroundColor:'rgba(0,82,255,.6)',  borderRadius:5 },
-        { label:'Ausgaben',  data:sorted.map(m=>Math.abs(m.expenses)), backgroundColor:'rgba(239,68,68,.55)', borderRadius:5 },
+        { label:'Einnahmen', data:sorted.map(m=>m.income),      backgroundColor:'rgba(0,82,255,.6)',   borderRadius:5 },
+        { label:'Konsum',    data:sorted.map(m=>m.consumption), backgroundColor:'rgba(239,68,68,.55)', borderRadius:5, stack:'out' },
+        { label:'Sparen',    data:sorted.map(m=>m.savings),     backgroundColor:'rgba(13,148,136,.55)',borderRadius:5, stack:'out' },
       ]
     },
     options: {
       maintainAspectRatio:false,
       plugins:{ legend:{ labels:{ color:'#94A3B8', font:{size:11,family:'Inter'}, boxWidth:12 } } },
       scales:{
-        x:{ ticks:{color:'#94A3B8',font:{size:11}}, grid:{color:'rgba(226,232,240,.8)'} },
+        x:{ stacked:true, ticks:{color:'#94A3B8',font:{size:11}}, grid:{color:'rgba(226,232,240,.8)'} },
         y:{ ticks:{color:'#4a5870',font:{size:11},callback:v=>v.toLocaleString('de-DE')+'€'}, grid:{color:'rgba(226,232,240,.8)'} }
       }
     }
@@ -1532,15 +1696,17 @@ function updateSortHeaders() {
 }
 
 async function loadTx() {
-  const month  = document.getElementById('tx-month').value;
+  const period = periodOf('tx-period');
   const cat    = document.getElementById('tx-cat').value;
   const src    = document.getElementById('tx-src').value;
   const search = document.getElementById('tx-search').value;
+  const onlyOut = document.getElementById('tx-onlyout').checked;
   let url = `/api/transactions?page=${txPage_}&page_size=50&sort=${txSort_}&dir=${txDir_}`;
-  if (month)  url+=`&month=${encodeURIComponent(month)}`;
-  if (cat)    url+=`&category=${encodeURIComponent(cat)}`;
-  if (src)    url+=`&source=${encodeURIComponent(src)}`;
-  if (search) url+=`&search=${encodeURIComponent(search)}`;
+  url += `&period=${encodeURIComponent(period)}`;
+  if (cat)     url+=`&category=${encodeURIComponent(cat)}`;
+  if (src)     url+=`&source=${encodeURIComponent(src)}`;
+  if (search)  url+=`&search=${encodeURIComponent(search)}`;
+  if (onlyOut) url+=`&only_outliers=true`;
   updateSortHeaders();
 
   const data = await api(url);
@@ -1556,13 +1722,14 @@ async function loadTx() {
   document.getElementById('sel-all').checked = false;
 
   document.getElementById('tx-body').innerHTML = data.transactions.map(t=>`
-    <tr>
+    <tr class="${t.is_outlier?'is-outlier':''}">
       <td><input type="checkbox" class="rc" value="${t.id}" onchange="onCheck()"></td>
       <td style="color:var(--text2);white-space:nowrap">
         <span class="ds" style="cursor:pointer;border-bottom:1px dashed var(--border)" onclick="editDate(${t.id},this)">${t.date}</span>
       </td>
       <td>
-        <div style="font-weight:500">${esc(t.merchant_name||t.description?.slice(0,60)||'—')}</div>
+        <div style="font-weight:500">${esc(t.merchant_name||t.description?.slice(0,60)||'—')}${
+          t.is_outlier?`<span class="badge-out" title="Ungewöhnlich hoch für ${esc(t.category)} – Schwelle ${fmt(t.outlier_threshold)}">Ausreißer</span>`:''}</div>
         ${t.merchant_name?`<div style="color:var(--text2);font-size:11.5px">${esc(t.description?.slice(0,70)||'')}</div>`:''}
         ${t.note?`<div style="color:var(--lime);font-size:11px;margin-top:2px">📝 ${esc(t.note)}</div>`:''}
       </td>
@@ -1604,8 +1771,7 @@ async function deleteBatch() {
   clearSel(); loadTx();
 }
 function exportCsv() {
-  const m = document.getElementById('tx-month').value;
-  window.location='/api/export/csv'+(m?`?month=${m}`:'');
+  window.location = `/api/export/csv?period=${encodeURIComponent(periodOf('tx-period'))}`;
 }
 function editDate(id,span) {
   const cur=span.textContent.trim();
@@ -1638,9 +1804,9 @@ async function delTx(id,btn) {
 
 // ── Stats ──────────────────────────────────────────────────────────────────────
 async function loadStats() {
-  const month=document.getElementById('stats-month').value;
-  const q=month?`?month=${month}`:'';
-  const [cat,inc]=await Promise.all([api('/api/stats/categories'+q),api('/api/stats/categories'+(q?q+'&type=income':'?type=income'))]);
+  const q = `?period=${encodeURIComponent(periodOf('stats-period'))}` +
+            (document.getElementById('stats-nooutlier').checked ? '&exclude_outliers=true' : '');
+  const [cat,inc]=await Promise.all([api('/api/stats/categories'+q),api('/api/stats/categories'+q+'&type=income')]);
   renderPie('chart-s-pie', cat, filterTimelineByCategory);
   renderBars('stats-bars', cat, 'red', filterTimelineByCategory);
   renderPie('chart-s-inc-pie', inc);
@@ -1657,26 +1823,50 @@ function filterTimelineByCategory(cat) {
   }, 100);
 }
 async function loadTimeline() {
-  const cat=document.getElementById('tl-cat').value;
-  const q=cat?`?category=${encodeURIComponent(cat)}`:'';
-  const data=await api('/api/stats/timeline'+q);
+  const cat = document.getElementById('tl-cat').value;
+  let q = `?window=3`;
+  if (cat) q += `&category=${encodeURIComponent(cat)}`;
+  if (document.getElementById('stats-nooutlier').checked) q += '&exclude_outliers=true';
+  const data = await api('/api/stats/timeline'+q);
+  const pts = data.points;
+
+  const trend = data.trend_per_month;
+  document.getElementById('tl-note').innerHTML =
+    pts.length ? `Median ${fmt(data.median)} · Trend <span class="${trend>0?'trend-up':'trend-down'}">` +
+                 `${trend>0?'+':''}${fmt(trend)} pro Monat</span>` : '';
+
   const canvas=document.getElementById('chart-tl');
   const ex=Chart.getChart(canvas); if(ex)ex.destroy();
-  new Chart(canvas,{type:'line',data:{labels:data.map(d=>d.month),datasets:[{label:cat||'Alle Ausgaben',data:data.map(d=>Math.abs(d.total)),borderColor:'#0052FF',backgroundColor:'rgba(0,82,255,.06)',fill:true,tension:0.3,pointRadius:4,pointBackgroundColor:'#0052FF',borderWidth:2}]},options:{maintainAspectRatio:false,plugins:{legend:{labels:{color:'#94A3B8',font:{size:11,family:'Inter'}}}},scales:{x:{ticks:{color:'#94A3B8',font:{size:11}},grid:{color:'rgba(226,232,240,.8)'}},y:{ticks:{color:'#4a5870',font:{size:11},callback:v=>v.toLocaleString('de-DE')+'€'},grid:{color:'rgba(226,232,240,.8)'}}}}});
+  new Chart(canvas,{
+    type:'line',
+    data:{labels:pts.map(d=>d.month),datasets:[
+      {label:cat||'Alle Ausgaben',data:pts.map(d=>d.total),borderColor:'#0052FF',
+       backgroundColor:'rgba(0,82,255,.06)',fill:true,tension:0.3,pointRadius:4,
+       pointBackgroundColor:'#0052FF',borderWidth:2},
+      {label:'gleitender Ø (3 Monate)',data:pts.map(d=>d.moving_avg),borderColor:'#F97316',
+       borderDash:[6,4],fill:false,tension:0.3,pointRadius:0,borderWidth:2},
+      {label:'Median',data:pts.map(()=>data.median),borderColor:'rgba(148,163,184,.7)',
+       borderDash:[2,3],fill:false,pointRadius:0,borderWidth:1.5},
+    ]},
+    options:{maintainAspectRatio:false,
+      plugins:{legend:{labels:{color:'#94A3B8',font:{size:11,family:'Inter'},boxWidth:12}}},
+      scales:{x:{ticks:{color:'#94A3B8',font:{size:11}},grid:{color:'rgba(226,232,240,.8)'}},
+              y:{ticks:{color:'#4a5870',font:{size:11},callback:v=>v.toLocaleString('de-DE')+'€'},grid:{color:'rgba(226,232,240,.8)'}}}}
+  });
   loadStatsTx();
 }
 
 async function loadStatsTx() {
-  const cat   = document.getElementById('tl-cat').value;
-  const month = document.getElementById('stats-month').value;
-  const card  = document.getElementById('stats-tx-card');
+  const cat    = document.getElementById('tl-cat').value;
+  const period = periodOf('stats-period');
+  const card   = document.getElementById('stats-tx-card');
   if (!cat) { card.style.display = 'none'; return; }
   card.style.display = 'block';
-  document.getElementById('stats-tx-label').textContent =
-    `Transaktionen — ${cat}${month ? ' · ' + month : ''}`;
+  const label = document.getElementById('stats-period').selectedOptions[0]?.textContent || '';
+  document.getElementById('stats-tx-label').textContent = `Transaktionen — ${cat} · ${label}`;
 
   let url = `/api/transactions?page=1&page_size=200&category=${encodeURIComponent(cat)}&sort=date&dir=desc`;
-  if (month) url += `&month=${encodeURIComponent(month)}`;
+  url += `&period=${encodeURIComponent(period)}`;
 
   const data  = await api(url);
   const sumEl = document.getElementById('stats-tx-sum');
@@ -1702,37 +1892,149 @@ async function loadStatsTx() {
     </tr>`).join('');
 }
 async function loadYearly() {
-  const year=document.getElementById('yr-year').value;
-  const data=await api('/api/stats/yearly'+(year?`?year=${year}`:''));
+  const data=await api(`/api/stats/yearly?period=${encodeURIComponent(periodOf('yr-period'))}`);
   const tbody=document.getElementById('yr-body'),tfoot=document.getElementById('yr-foot');
-  tbody.innerHTML=data.map(r=>`<tr><td>${r.month}</td><td class="positive">${fmt(r.income)}</td><td class="negative">${fmt(r.expenses)}</td><td class="${r.balance>=0?'positive':'negative'}">${fmt(r.balance)}</td><td>${fmt(r.savings)}</td><td>${r.savings_rate.toFixed(1)} %</td></tr>`).join('');
+  tbody.innerHTML=data.length?data.map(r=>`<tr>
+      <td>${r.month}</td>
+      <td class="positive">${fmt(r.income)}</td>
+      <td class="negative">${fmt(r.consumption)}</td>
+      <td style="color:var(--teal)">${fmt(r.savings)}</td>
+      <td class="${r.balance>=0?'positive':'negative'}">${fmt(r.balance)}</td>
+      <td>${r.savings_rate.toFixed(1)} %</td></tr>`).join('')
+    :'<tr><td colspan="6" style="color:var(--text2);text-align:center;padding:20px">Keine Daten im Zeitraum</td></tr>';
   if (data.length) {
-    const tI=data.reduce((s,r)=>s+r.income,0),tE=data.reduce((s,r)=>s+r.expenses,0),tS=data.reduce((s,r)=>s+r.savings,0),avgSQ=data.reduce((s,r)=>s+r.savings_rate,0)/data.length;
-    tfoot.innerHTML=`<tr><td>Gesamt</td><td class="positive">${fmt(tI)}</td><td class="negative">${fmt(tE)}</td><td class="${(tI-tE)>=0?'positive':'negative'}">${fmt(tI-tE)}</td><td>${fmt(tS)}</td><td>${avgSQ.toFixed(1)} %</td></tr>`;
-  }
+    const sum=k=>data.reduce((s,r)=>s+r[k],0);
+    const tI=sum('income'), tC=sum('consumption'), tS=sum('savings');
+    tfoot.innerHTML=`<tr><td>Gesamt</td><td class="positive">${fmt(tI)}</td><td class="negative">${fmt(tC)}</td>
+      <td style="color:var(--teal)">${fmt(tS)}</td>
+      <td class="${(tI-tC-tS)>=0?'positive':'negative'}">${fmt(tI-tC-tS)}</td>
+      <td>${(tI>0?tS/tI*100:0).toFixed(1)} %</td></tr>`;
+  } else tfoot.innerHTML='';
 }
+
 async function loadComparison() {
-  const m=document.getElementById('cmp-month').value;
-  const data=await api('/api/stats/comparison'+(m?`?month=${m}`:''));
+  const q = `?period=${encodeURIComponent(periodOf('cmp-period'))}` +
+            (document.getElementById('cmp-nooutlier').checked ? '&exclude_outliers=true' : '');
+  const data = await api('/api/stats/comparison'+q);
   if (!data.categories) return;
-  document.getElementById('cmp-body').innerHTML=data.categories.map(r=>`<tr><td>${esc(r.category)}</td><td style="text-align:right;font-weight:600">${fmt(r.current)}</td><td style="text-align:right;color:var(--text3)">${fmt(r.previous)}</td><td style="text-align:right">${fmtDiff(r.diff_prev)}</td><td style="text-align:right;color:var(--text3)">${fmt(r.average)}</td><td style="text-align:right">${fmtDiff(r.diff_avg)}</td></tr>`).join('');
+  const n = data.months_in_period;
+  document.getElementById('cmp-note').textContent =
+    `${data.period.label} gegen ${data.prev_period?data.prev_period.label:'—'}. ` +
+    (n>1 ? `Der Zeitraum umfasst ${n} Monate – „Median/Monat" und „gleit. Ø" sind Monatswerte, ` +
+           `„vs. Median" vergleicht deshalb den Monatsschnitt des Zeitraums.`
+         : `„Median/Monat" ist der typische Monatswert über die ganze Historie – robuster als ein Mittelwert, ` +
+           `weil einzelne Großausgaben ihn nicht verschieben.`);
+
+  document.getElementById('cmp-body').innerHTML = data.categories.map(r=>{
+    const pct = r.pct_vs_median;
+    const pctTxt = pct===null ? '—'
+      : `<span class="${pct>0?'negative':pct<0?'positive':''}">${pct>0?'+':''}${pct.toFixed(0)} %</span>`;
+    const tr = r.trend_per_month;
+    return `<tr>
+      <td>${esc(r.category)}</td>
+      <td style="text-align:right;font-weight:600">${fmt(r.current)}</td>
+      <td style="text-align:right;color:var(--text3)">${fmt(r.previous)}</td>
+      <td style="text-align:right">${fmtDiff(r.diff_prev)}</td>
+      <td style="text-align:right;color:var(--text3)">${fmt(r.median)}</td>
+      <td style="text-align:right;color:var(--text3)">${fmt(r.moving_avg)}</td>
+      <td style="text-align:right">${pctTxt}</td>
+      <td style="text-align:right" class="${tr>0?'trend-up':tr<0?'trend-down':''}">${tr>0?'+':''}${fmt(tr)}</td>
+    </tr>`;
+  }).join('');
 }
+
 async function loadRecurring() {
-  const data=await api('/api/stats/recurring');
-  document.getElementById('abo-body').innerHTML=data.length?data.map(r=>`
-    <tr>
-      <td>
-        ${esc(r.merchant_name)}
-        ${r.price_changed?'<span class="chip chip-warn" style="margin-left:6px" title="Betrag hat sich um >10% verändert">⚠ Preisänderung</span>':''}
-      </td>
+  const data = await api('/api/stats/recurring');
+  document.getElementById('abo-fix').textContent = fmt(data.fixed_monthly);
+  document.getElementById('abo-fix-sub').textContent =
+    `${data.fixed_count} feste Abos · ${fmt(data.fixed_yearly)} pro Jahr`;
+  document.getElementById('abo-var').textContent = fmt(data.variable_monthly);
+  document.getElementById('abo-sav').textContent = fmt(data.savings_monthly);
+  document.getElementById('abo-inc').textContent = data.price_increases;
+
+  const items = data.items;
+  document.getElementById('abo-body').innerHTML = items.length ? items.map(r=>{
+    const pc = r.price_change;
+    const pcTxt = pc
+      ? `<span class="${pc.diff>0?'negative':'positive'}">${fmt(pc.from)} → ${fmt(pc.to)} (${pc.pct>0?'+':''}${pc.pct.toFixed(0)} %)</span>`
+      : '<span style="color:var(--text3)">—</span>';
+    return `<tr>
+      <td>${esc(r.merchant_name)}${r.kind==='savings'?'<span class="chip chip-std" style="margin-left:6px">Sparplan</span>':''}</td>
       <td style="color:var(--text3)">${esc(r.category)}</td>
       <td><span class="chip ${r.type==='fix'?'chip-std':'chip-user'}">${r.type==='fix'?'Fix':'Variabel'}</span></td>
-      <td style="text-align:right;color:var(--red)">${fmt(Math.abs(r.avg_amount))}</td>
-      <td style="text-align:right;color:var(--text3)">${r.months}x</td>
-      <td style="color:var(--text3)">${r.first_date}</td>
-      <td style="color:var(--text3)">${r.last_date}</td>
+      <td style="text-align:right;color:var(--red)">${fmt(r.median_amount)}</td>
+      <td style="text-align:right">${fmt(r.monthly_cost)}</td>
+      <td style="text-align:right;font-weight:600">${fmt(r.yearly_cost)}</td>
+      <td style="color:var(--text3);white-space:nowrap">${r.next_expected}</td>
+      <td style="white-space:nowrap">${pcTxt}</td>
+    </tr>`;
+  }).join('')
+  : '<tr><td colspan="8" style="color:var(--text2);text-align:center;padding:20px">Keine wiederkehrenden Buchungen</td></tr>';
+}
+
+// ── Vermögensaufbau ────────────────────────────────────────────────────────────
+async function loadWealth() {
+  const data = await api(`/api/stats/wealth?period=${encodeURIComponent(periodOf('verm-period'))}`);
+  const pts = data.points;
+  document.getElementById('w-total').textContent = fmt(data.total);
+  document.getElementById('w-total-sub').textContent = `über ${pts.length} Monate`;
+  document.getElementById('w-avg').textContent = fmt(data.avg_per_month);
+  document.getElementById('w-rate').textContent = data.median_rate.toFixed(1)+' %';
+  document.getElementById('w-rate-sub').textContent = data.goal!==null ? `Ziel ${data.goal} %` : 'kein Ziel gesetzt';
+  const goalEl = document.getElementById('w-goal');
+  goalEl.textContent = data.goal!==null ? `${data.months_goal_met} / ${pts.length}` : '—';
+  goalEl.className = 'kpi-value ' + (data.goal!==null && data.months_goal_met>=pts.length/2 ? 'lime':'red');
+  document.getElementById('w-goal-sub').textContent = data.goal!==null ? 'Monate über dem Ziel' : '';
+
+  const axes = {
+    x:{ticks:{color:'#94A3B8',font:{size:11}},grid:{color:'rgba(226,232,240,.8)'}},
+    y:{ticks:{color:'#4a5870',font:{size:11},callback:v=>v.toLocaleString('de-DE')+'€'},grid:{color:'rgba(226,232,240,.8)'}}
+  };
+  let cv = document.getElementById('chart-wealth');
+  Chart.getChart(cv)?.destroy();
+  new Chart(cv,{type:'line',data:{labels:pts.map(p=>p.month),datasets:[
+      {label:'kumuliert gespart',data:pts.map(p=>p.cumulative),borderColor:'#0D9488',
+       backgroundColor:'rgba(13,148,136,.10)',fill:true,tension:0.3,pointRadius:4,
+       pointBackgroundColor:'#0D9488',borderWidth:2},
+      {label:'pro Monat',data:pts.map(p=>p.savings),borderColor:'rgba(0,82,255,.6)',
+       fill:false,tension:0.3,pointRadius:3,borderWidth:1.5},
+    ]},options:{maintainAspectRatio:false,
+      plugins:{legend:{labels:{color:'#94A3B8',font:{size:11,family:'Inter'},boxWidth:12}}},scales:axes}});
+
+  cv = document.getElementById('chart-wrate');
+  Chart.getChart(cv)?.destroy();
+  const rateSets = [{label:'Sparquote',data:pts.map(p=>p.savings_rate),
+      backgroundColor:pts.map(p=>data.goal!==null && p.savings_rate>=data.goal ? 'rgba(13,148,136,.65)':'rgba(249,115,22,.6)'),
+      borderRadius:5}];
+  if (data.goal!==null) rateSets.push({type:'line',label:`Ziel ${data.goal} %`,
+      data:pts.map(()=>data.goal),borderColor:'#EF4444',borderDash:[5,4],pointRadius:0,borderWidth:2,fill:false});
+  new Chart(cv,{type:'bar',data:{labels:pts.map(p=>p.month),datasets:rateSets},
+    options:{maintainAspectRatio:false,
+      plugins:{legend:{labels:{color:'#94A3B8',font:{size:11,family:'Inter'},boxWidth:12}}},
+      scales:{x:axes.x,y:{ticks:{color:'#4a5870',font:{size:11},callback:v=>v+' %'},grid:{color:'rgba(226,232,240,.8)'}}}}});
+}
+
+// ── Ausreißer ──────────────────────────────────────────────────────────────────
+async function loadOutliers() {
+  const data = await api(`/api/stats/outliers?period=${encodeURIComponent(periodOf('aus-period'))}`);
+  document.getElementById('aus-note').textContent =
+    `Ungewöhnlich hohe Einzelbuchungen: mindestens das ${4}-fache des Kategorie-Medians und über 100 €. ` +
+    `Regelmäßige Zahlungen (${data.recurring_ignored} Händler mit Buchungen in ≥ 3 Monaten) bleiben außen vor – ` +
+    `eine monatlich gleiche Abbuchung ist kein Ausreißer. ` +
+    `Gefunden: ${data.outliers.length} Buchungen über zusammen ${fmt(data.total)}.`;
+  document.getElementById('aus-body').innerHTML = data.outliers.length ? data.outliers.map(o=>`
+    <tr>
+      <td style="color:var(--text2);white-space:nowrap">${o.date}</td>
+      <td>
+        <div style="font-weight:500">${esc(o.merchant_name||o.description?.slice(0,60)||'—')}</div>
+        ${o.merchant_name?`<div style="color:var(--text2);font-size:11.5px">${esc(o.description?.slice(0,70)||'')}</div>`:''}
+      </td>
+      <td style="color:var(--text3)">${esc(o.category)}</td>
+      <td style="text-align:right" class="amount-neg">${fmt(Math.abs(o.amount))}</td>
+      <td style="text-align:right;color:var(--text3)">${fmt(o.threshold)}</td>
+      <td style="text-align:right;font-weight:600;color:var(--orange)">${o.factor}×</td>
     </tr>`).join('')
-  :'<tr><td colspan="7" style="color:var(--text2);text-align:center;padding:20px">Keine wiederkehrenden Buchungen</td></tr>';
+  : '<tr><td colspan="6" style="color:var(--text2);text-align:center;padding:20px">Keine Ausreißer im Zeitraum</td></tr>';
 }
 
 // ── Categories ─────────────────────────────────────────────────────────────────
@@ -1742,6 +2044,12 @@ async function loadCats() {
     <tr>
       <td style="font-weight:500">${esc(c.name)}</td>
       <td><span class="chip ${c.is_default?'chip-std':'chip-user'}">${c.is_default?'Standard':'Eigene'}</span></td>
+      <td>
+        <select class="cat-sel" onchange="setCatKind('${esc(c.name).replace(/'/g,"\\'")}',this.value)"
+                title="Bestimmt, wie die Kategorie in den Auswertungen zählt">
+          ${KINDS.map(([v,l])=>`<option value="${v}"${c.kind===v?' selected':''}>${l}</option>`).join('')}
+        </select>
+      </td>
       <td style="white-space:nowrap;text-align:right">
         ${c.name!=='Sonstiges'?`
           <button class="sec" style="padding:4px 10px;font-size:11px" onclick="renameCat('${esc(c.name).replace(/'/g,"\\'")}')">✏️</button>
@@ -1750,6 +2058,25 @@ async function loadCats() {
       </td>
     </tr>`).join('');
 }
+// Art einer Kategorie – steuert, ob sie als Konsum, Sparen oder reine
+// Umbuchung in die Auswertungen eingeht.
+const KINDS = [
+  ['consumption', 'Konsum'],
+  ['savings',     'Sparen'],
+  ['income',      'Einnahme'],
+  ['transfer',    'Umbuchung (zählt nicht)'],
+];
+
+async function setCatKind(name, kind) {
+  const msg = document.getElementById('msg-cat');
+  try {
+    await api(`/api/categories/${encodeURIComponent(name)}/kind`,
+      {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind})});
+    const label = (KINDS.find(k=>k[0]===kind)||[])[1] || kind;
+    showMsg(msg,'ok',`✓ "${name}" zählt jetzt als ${label}`);
+  } catch(e) { showMsg(msg,'err','✗ '+e.message); loadCats(); }
+}
+
 async function createCatUI() {
   const name=document.getElementById('cat-input').value.trim();
   const msg=document.getElementById('msg-cat'); if (!name) return;
@@ -1902,8 +2229,7 @@ async function editSavingsGoal() {
 
 // ── Budget ─────────────────────────────────────────────────────────────────────
 async function loadBudget() {
-  const month = document.getElementById('budget-month').value;
-  const data = await api('/api/budgets/status' + (month ? `?month=${month}` : ''));
+  const data = await api(`/api/budgets/status?period=${encodeURIComponent(periodOf('budget-period'))}`);
   if (!data.month) {
     document.getElementById('budget-kpis').innerHTML = '';
     document.getElementById('budget-list').innerHTML = '<div style="color:var(--text2);padding:20px">Keine Daten vorhanden</div>';
@@ -1918,7 +2244,7 @@ async function loadBudget() {
   const overColor   = overCount > 0 ? 'red' : 'lime';
 
   document.getElementById('budget-kpis').innerHTML = `
-    <div class="kpi"><div class="kpi-dot blue"></div><div class="kpi-label">Gesamtbudget</div><div class="kpi-value blue">${fmt(totalBudget)}</div><div class="kpi-sub">${data.month}</div></div>
+    <div class="kpi"><div class="kpi-dot blue"></div><div class="kpi-label">Gesamtbudget</div><div class="kpi-value blue">${fmt(totalBudget)}</div><div class="kpi-sub">${data.period.label}${data.months>1?" ("+data.months+" Monate)":""}</div></div>
     <div class="kpi"><div class="kpi-dot red"></div><div class="kpi-label">Ausgegeben</div><div class="kpi-value red">${fmt(totalSpent)}</div><div class="kpi-sub">${totalBudget>0?((totalSpent/totalBudget)*100).toFixed(0)+' %':'—'}</div></div>
     <div class="kpi"><div class="kpi-dot ${overColor}"></div><div class="kpi-label">Überschritten</div><div class="kpi-value ${overColor}">${overCount}</div><div class="kpi-sub">Kategorie${overCount!==1?'n':''}</div></div>`;
 

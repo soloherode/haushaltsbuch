@@ -12,8 +12,8 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Stre
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
-from app import auth
-from app.database import init_db, get_db, DB_PATH
+from app import analytics, auth, periods
+from app.database import init_db, get_db, DB_PATH, VALID_KINDS
 from app.categories import CATEGORIES
 from app.parsers.comdirect import parse_comdirect_csv
 from app.parsers.hanseaticbank import parse_hanseaticbank_json
@@ -180,33 +180,6 @@ def root():
 
 # ─── Helpers ───────────────────────────────────────────────────────────────────
 
-MONTH_RE = re.compile(r"^\d{4}-\d{2}$")
-YEAR_RE = re.compile(r"^\d{4}$")
-
-
-def _month_range(month: str) -> list[str]:
-    """'2026-04' → ['2026-04-01', '2026-05-01'] (halboffen).
-
-    Als Bereichsvergleich statt LIKE 'YYYY-MM%', damit SQLite idx_transactions_date
-    nutzen kann – LIKE erzwingt sonst einen Full Table Scan.
-    """
-    if not MONTH_RE.match(month):
-        raise HTTPException(400, "Monat muss im Format YYYY-MM sein")
-    year, mon = int(month[:4]), int(month[5:])
-    if not 1 <= mon <= 12:
-        raise HTTPException(400, f"Ungültiger Monat: {month}")
-    next_year, next_mon = (year + 1, 1) if mon == 12 else (year, mon + 1)
-    return [f"{year:04d}-{mon:02d}-01", f"{next_year:04d}-{next_mon:02d}-01"]
-
-
-def _year_range(year: str) -> list[str]:
-    """'2026' → ['2026-01-01', '2027-01-01'] (halboffen)."""
-    if not YEAR_RE.match(year):
-        raise HTTPException(400, "Jahr muss im Format YYYY sein")
-    y = int(year)
-    return [f"{y:04d}-01-01", f"{y + 1:04d}-01-01"]
-
-
 def _apply_db_rules(description: str, merchant: str, conn) -> str | None:
     """Check user-defined rules in DB; return category or None."""
     text = (description + " " + merchant).lower()
@@ -290,9 +263,11 @@ def list_transactions(
     category: str = Query(None),
     source: str = Query(None),
     month: str = Query(None),
+    period: str = Query(None),
     search: str = Query(None),
     sort: str = Query("date"),
     dir: str = Query("desc"),
+    only_outliers: bool = Query(False),
 ):
     sort_col = sort if sort in ALLOWED_SORT_COLS else "date"
     sort_dir = "ASC" if dir == "asc" else "DESC"
@@ -309,32 +284,49 @@ def list_transactions(
     if source:
         conditions.append("source = ?")
         params.append(source)
-    if month:
-        conditions.append("date >= ? AND date < ?")
-        params += _month_range(month)
+    if period is not None or month:
+        p = _resolve_period(conn, period, month)
+        if p.bounded:
+            conditions.append("date >= ? AND date < ?")
+            params += [p.start, p.end]
     if search:
         conditions.append("(description LIKE ? OR merchant_name LIKE ?)")
         params += [f"%{search}%", f"%{search}%"]
 
+    thresholds, recurring = _outlier_context(conn)
+    if only_outliers:
+        cond, cond_params = _outlier_sql(thresholds, recurring)
+        conditions.append(cond if cond else "0")
+        params += cond_params
+
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
     offset = (page - 1) * page_size
 
-    total = conn.execute(f"SELECT COUNT(*) FROM transactions {where}", params).fetchone()[0]
+    # `t` als Alias, weil _outlier_sql die Spalten so anspricht.
+    total = conn.execute(f"SELECT COUNT(*) FROM transactions t {where}", params).fetchone()[0]
     sum_row = conn.execute(
-        f"SELECT SUM(amount) AS total_sum FROM transactions {where}", params
+        f"SELECT SUM(t.amount) AS total_sum FROM transactions t {where}", params
     ).fetchone()
     rows = conn.execute(
-        f"SELECT * FROM transactions {where} ORDER BY {order} LIMIT ? OFFSET ?",
+        f"SELECT t.* FROM transactions t {where} ORDER BY {order} LIMIT ? OFFSET ?",
         params + [page_size, offset]
     ).fetchall()
 
     conn.close()
+
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["is_outlier"] = _is_outlier(r, thresholds, recurring)
+        d["outlier_threshold"] = thresholds.get(d["category"]) if d["is_outlier"] else None
+        out.append(d)
+
     return {
         "total": total,
         "total_sum": round(sum_row["total_sum"] or 0, 2),
         "page": page,
         "page_size": page_size,
-        "transactions": [dict(r) for r in rows],
+        "transactions": out,
     }
 
 
@@ -507,215 +499,572 @@ def apply_rules_to_all():
 
 # ─── Stats ─────────────────────────────────────────────────────────────────────
 
-@app.get("/api/stats/summary")
-def stats_summary(month: str = Query(None)):
+# Alle Auswertungen laufen über diesen Join, damit die Art einer Kategorie
+# (Konsum / Sparen / Umbuchung / Einkommen) überall gleich behandelt wird.
+TX = "transactions t LEFT JOIN categories c ON c.name = t.category"
+KIND = "COALESCE(c.kind, 'consumption')"
+
+
+def _latest_month(conn) -> str | None:
+    row = conn.execute(
+        "SELECT MAX(substr(date, 1, 7)) FROM transactions WHERE date != '0000-00-00'"
+    ).fetchone()
+    return row[0]
+
+
+def _resolve_period(conn, period: str | None, month: str | None = None) -> periods.Period:
+    """`period=` ist der neue Weg, `month=` bleibt rückwärtskompatibel erhalten."""
+    try:
+        return periods.parse(period if period is not None else month, _latest_month(conn))
+    except periods.PeriodError as exc:
+        raise HTTPException(400, str(exc))
+
+
+def _where(period: periods.Period, *extra: str) -> tuple[str, list]:
+    frag, params = period.where("t.date")
+    clauses = [frag, *[e for e in extra if e]]
+    return "WHERE " + " AND ".join(clauses), params
+
+
+def _period_info(p: periods.Period) -> dict:
+    return {"label": p.label, "kind": p.kind, "start": p.start, "end": p.end,
+            "months": len(p.months()) or None}
+
+
+# ─── Ausreißer ─────────────────────────────────────────────────────────────────
+
+def _outlier_context(conn) -> tuple[dict[str, float], set[str]]:
+    """(Schwelle je Kategorie, wiederkehrende Händler) über die gesamte Historie.
+
+    Bewusst über alle Daten und nicht nur über den gewählten Zeitraum – sonst
+    verschiebt sich die Schwelle, sobald man den Zeitraum wechselt.
+    """
+    rows = conn.execute(f"""
+        SELECT t.category AS category, t.amount AS amount,
+               t.date AS date, t.merchant_name AS merchant_name
+        FROM {TX}
+        WHERE t.amount < 0 AND t.date != '0000-00-00' AND {KIND} = 'consumption'
+    """).fetchall()
+    by_cat: dict[str, list[float]] = {}
+    for r in rows:
+        by_cat.setdefault(r["category"], []).append(r["amount"])
+    return analytics.outlier_thresholds(by_cat), analytics.recurring_merchants(rows)
+
+
+def _is_outlier(row, thresholds: dict[str, float], recurring: set[str]) -> bool:
+    if (row["amount"] or 0) >= 0:
+        return False
+    # Vormerkposten ohne Datum lassen sich zeitlich nicht einordnen.
+    if not row["date"] or row["date"] == "0000-00-00":
+        return False
+    if row["merchant_name"] in recurring:
+        return False
+    thr = thresholds.get(row["category"])
+    return bool(thr and abs(row["amount"]) >= thr)
+
+
+def _outlier_sql(thresholds: dict[str, float], recurring: set[str]) -> tuple[str, list]:
+    """SQL-Bedingung, die genau die Ausreißer trifft (für Filtern und Ausblenden)."""
+    if not thresholds:
+        return "", []
+    parts, params = [], []
+    for cat, thr in thresholds.items():
+        parts.append("(t.category = ? AND ABS(t.amount) >= ?)")
+        params += [cat, thr]
+    cond = "(" + " OR ".join(parts) + ")"
+    if recurring:
+        placeholders = ",".join("?" * len(recurring))
+        cond = f"(COALESCE(t.merchant_name, '') NOT IN ({placeholders}) AND {cond})"
+        params = list(recurring) + params
+    # gleiche Bedingung wie in _is_outlier, damit Liste und Statistik übereinstimmen
+    return f"(t.date != '0000-00-00' AND {cond})", params
+
+
+def _exclude_outliers(thresholds: dict[str, float], recurring: set[str]) -> tuple[str, list]:
+    cond, params = _outlier_sql(thresholds, recurring)
+    return (f"NOT {cond}", params) if cond else ("", [])
+
+
+@app.get("/api/stats/outliers")
+def stats_outliers(period: str = Query(None), month: str = Query(None)):
+    """Ungewöhnlich große Einzelausgaben je Kategorie."""
     conn = get_db()
-    if month:
-        where = "WHERE date >= ? AND date < ? AND category != 'Überweisung'"
-        params = _month_range(month)
-    else:
-        where = "WHERE category != 'Überweisung'"
-        params = []
-
-    row = conn.execute(f"""
-        SELECT
-            SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END) AS income,
-            SUM(CASE WHEN amount < 0 THEN amount ELSE 0 END) AS expenses,
-            COUNT(*) AS count
-        FROM transactions {where}
-    """, params).fetchone()
-
+    p = _resolve_period(conn, period, month)
+    thresholds, recurring = _outlier_context(conn)
+    where, params = _where(p, f"{KIND} = 'consumption'", "t.amount < 0")
+    rows = conn.execute(f"""
+        SELECT t.id, t.date, t.amount, t.description, t.merchant_name, t.category
+        FROM {TX} {where}
+        ORDER BY t.date DESC
+    """, params).fetchall()
     conn.close()
+
+    out = []
+    for r in rows:
+        if not _is_outlier(r, thresholds, recurring):
+            continue
+        thr = thresholds[r["category"]]
+        out.append({**dict(r), "threshold": thr,
+                    "factor": round(abs(r["amount"]) / thr, 1)})
+    out.sort(key=lambda x: abs(x["amount"]), reverse=True)
     return {
-        "income":   round(row["income"] or 0, 2),
-        "expenses": round(row["expenses"] or 0, 2),
-        "balance":  round((row["income"] or 0) + (row["expenses"] or 0), 2),
-        "count":    row["count"],
+        "period": _period_info(p),
+        "thresholds": thresholds,
+        "recurring_ignored": len(recurring),
+        "total": round(sum(abs(o["amount"]) for o in out), 2),
+        "outliers": out,
+    }
+
+
+# ─── Übersicht ─────────────────────────────────────────────────────────────────
+
+@app.get("/api/stats/summary")
+def stats_summary(period: str = Query(None), month: str = Query(None)):
+    conn = get_db()
+    p = _resolve_period(conn, period, month)
+    where, params = _where(p)
+    rows = conn.execute(f"""
+        SELECT {KIND} AS kind,
+               SUM(CASE WHEN t.amount > 0 THEN t.amount ELSE 0 END) AS inflow,
+               SUM(CASE WHEN t.amount < 0 THEN -t.amount ELSE 0 END) AS outflow,
+               COUNT(*) AS n
+        FROM {TX} {where}
+        GROUP BY kind
+    """, params).fetchall()
+    # Für Monatsschnitte zählen nur Monate, in denen es überhaupt Buchungen gibt –
+    # sonst rechnet ein angebrochenes Jahr durch zwölf und sieht zu günstig aus.
+    active = conn.execute(f"""
+        SELECT COUNT(DISTINCT substr(t.date, 1, 7)) FROM {TX} {where}
+    """, params).fetchone()[0]
+    conn.close()
+
+    agg = {r["kind"]: r for r in rows}
+
+    def io(kind: str) -> tuple[float, float]:
+        r = agg.get(kind)
+        return ((r["inflow"] or 0.0), (r["outflow"] or 0.0)) if r else (0.0, 0.0)
+
+    inc_in, inc_out = io("income")
+    con_in, con_out = io("consumption")
+    sav_in, sav_out = io("savings")
+    tr_in, tr_out = io("transfer")
+
+    income = inc_in - inc_out         # Rückbuchungen mindern die Einnahmen
+    consumption = con_out - con_in    # Erstattungen mindern den Konsum
+    savings = sav_out - sav_in        # Entnahmen mindern die Sparrate
+    count = sum((r["n"] or 0) for k, r in agg.items() if k != "transfer")
+
+    return {
+        "income":       round(income, 2),
+        "consumption":  round(consumption, 2),
+        "savings":      round(savings, 2),
+        "expenses":     round(consumption + savings, 2),   # gesamter Abfluss
+        "balance":      round(income - consumption - savings, 2),
+        "savings_rate": round(savings / income * 100, 1) if income > 0 else 0.0,
+        "transfers":    round(tr_in + tr_out, 2),
+        "count":        count,
+        "active_months": active,
+        "period":       _period_info(p),
     }
 
 
 @app.get("/api/stats/categories")
-def stats_categories(month: str = Query(None), type: str = Query("expense")):
+def stats_categories(
+    period: str = Query(None),
+    month: str = Query(None),
+    type: str = Query("expense"),
+    kind: str = Query(None),
+    exclude_outliers: bool = Query(False),
+):
+    """Summen je Kategorie. `kind` filtert auf Konsum/Sparen/Einkommen."""
     conn = get_db()
-    amount_filter = "amount > 0" if type == "income" else "amount < 0"
-    if month:
-        where = f"WHERE date >= ? AND date < ? AND {amount_filter} AND category != 'Überweisung'"
-        params = _month_range(month)
-    else:
-        where = f"WHERE {amount_filter} AND category != 'Überweisung'"
-        params = []
+    p = _resolve_period(conn, period, month)
 
+    excl_sql, excl_params = "", []
+    if exclude_outliers:
+        excl_sql, excl_params = _exclude_outliers(*_outlier_context(conn))
+
+    where, params = _where(p, excl_sql)
     rows = conn.execute(f"""
-        SELECT category, SUM(amount) AS total, COUNT(*) AS count
-        FROM transactions {where}
-        GROUP BY category
-        ORDER BY total {"DESC" if type == "income" else "ASC"}
-    """, params).fetchall()
-
+        SELECT t.category AS category, {KIND} AS kind,
+               SUM(t.amount) AS total, COUNT(*) AS count
+        FROM {TX} {where}
+        GROUP BY t.category, kind
+    """, params + excl_params).fetchall()
     conn.close()
-    return [{"category": r["category"], "total": round(r["total"], 2), "count": r["count"]} for r in rows]
+
+    wanted = kind or ("income" if type == "income" else "consumption")
+    out = []
+    for r in rows:
+        if r["kind"] == "transfer":
+            continue
+        if wanted != "all" and r["kind"] != wanted:
+            continue
+        total = r["total"] or 0
+        # Einnahmen sind positiv, Ausgaben negativ – Kategorien, deren Saldo in
+        # die falsche Richtung zeigt (z. B. reine Erstattungen), fallen raus.
+        if type == "income" and total <= 0:
+            continue
+        if type != "income" and total >= 0:
+            continue
+        out.append({"category": r["category"], "kind": r["kind"],
+                    "total": round(total, 2), "count": r["count"]})
+
+    out.sort(key=lambda x: x["total"], reverse=(type == "income"))
+    return out
 
 
 @app.get("/api/stats/monthly")
-def stats_monthly():
+def stats_monthly(period: str = Query(None), limit: int = Query(24, ge=1, le=120)):
+    """Monatsverlauf mit getrenntem Konsum und Sparen."""
     conn = get_db()
-    rows = conn.execute("""
-        SELECT
-            substr(date, 1, 7) AS month,
-            SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END) AS income,
-            SUM(CASE WHEN amount < 0 THEN amount ELSE 0 END) AS expenses
-        FROM transactions
-        WHERE date != '0000-00-00' AND category != 'Überweisung'
-        GROUP BY month
-        ORDER BY month DESC
-        LIMIT 24
-    """).fetchall()
-    conn.close()
-    return [{"month": r["month"], "income": round(r["income"] or 0, 2), "expenses": round(r["expenses"] or 0, 2)} for r in rows]
-
-
-@app.get("/api/stats/timeline")
-def stats_timeline(category: str = Query(None)):
-    conn = get_db()
-    where = "WHERE date != '0000-00-00' AND amount < 0 AND category != 'Überweisung' AND category = ?" if category else "WHERE date != '0000-00-00' AND amount < 0 AND category != 'Überweisung'"
-    params = [category] if category else []
-
+    p = _resolve_period(conn, period)
+    where, params = _where(p)
     rows = conn.execute(f"""
-        SELECT substr(date, 1, 7) AS month, SUM(amount) AS total
-        FROM transactions {where}
-        GROUP BY month
+        SELECT substr(t.date, 1, 7) AS month, {KIND} AS kind,
+               SUM(CASE WHEN t.amount > 0 THEN t.amount ELSE 0 END) AS inflow,
+               SUM(CASE WHEN t.amount < 0 THEN -t.amount ELSE 0 END) AS outflow
+        FROM {TX} {where}
+        GROUP BY month, kind
         ORDER BY month
     """, params).fetchall()
     conn.close()
-    return [{"month": r["month"], "total": round(r["total"], 2)} for r in rows]
+
+    by_month: dict[str, dict[str, float]] = {}
+    for r in rows:
+        m = by_month.setdefault(r["month"], {"income": 0.0, "consumption": 0.0, "savings": 0.0})
+        if r["kind"] == "income":
+            m["income"] += (r["inflow"] or 0) - (r["outflow"] or 0)
+        elif r["kind"] == "consumption":
+            m["consumption"] += (r["outflow"] or 0) - (r["inflow"] or 0)
+        elif r["kind"] == "savings":
+            m["savings"] += (r["outflow"] or 0) - (r["inflow"] or 0)
+
+    months = sorted(by_month)[-limit:]
+    return [{
+        "month": m,
+        "income": round(by_month[m]["income"], 2),
+        "consumption": round(by_month[m]["consumption"], 2),
+        "savings": round(by_month[m]["savings"], 2),
+        "expenses": round(by_month[m]["consumption"] + by_month[m]["savings"], 2),
+    } for m in months]
+
+
+@app.get("/api/stats/timeline")
+def stats_timeline(
+    category: str = Query(None),
+    period: str = Query(None),
+    exclude_outliers: bool = Query(False),
+    window: int = Query(3, ge=2, le=12),
+):
+    """Monatsverlauf einer Kategorie inklusive gleitendem Durchschnitt."""
+    conn = get_db()
+    p = _resolve_period(conn, period)
+
+    excl_sql, excl_params = "", []
+    if exclude_outliers:
+        excl_sql, excl_params = _exclude_outliers(*_outlier_context(conn))
+
+    cat_sql, cat_params = ("t.category = ?", [category]) if category else ("", [])
+    where, params = _where(p, f"{KIND} = 'consumption'", "t.amount < 0", cat_sql, excl_sql)
+    rows = conn.execute(f"""
+        SELECT substr(t.date, 1, 7) AS month, SUM(-t.amount) AS total
+        FROM {TX} {where}
+        GROUP BY month ORDER BY month
+    """, params + cat_params + excl_params).fetchall()
+    conn.close()
+
+    totals = [r["total"] or 0 for r in rows]
+    avg = analytics.moving_average(totals, window)
+    med = analytics.median(totals)
+    return {
+        "category": category,
+        "median": round(med, 2),
+        "trend_per_month": round(analytics.trend(totals), 2),
+        "window": window,
+        "points": [{"month": r["month"],
+                    "total": round(t, 2),
+                    "moving_avg": round(a, 2)}
+                   for r, t, a in zip(rows, totals, avg)],
+    }
 
 
 @app.get("/api/stats/yearly")
-def stats_yearly(year: str = Query(None)):
+def stats_yearly(year: str = Query(None), period: str = Query(None)):
+    """Monatsübersicht innerhalb eines Jahres bzw. Zeitraums."""
     conn = get_db()
-    if year:
-        where = "WHERE date >= ? AND date < ? AND category != 'Überweisung'"
-        params = _year_range(year)
-    else:
-        where = "WHERE date != '0000-00-00' AND category != 'Überweisung'"
-        params = []
+    p = _resolve_period(conn, period or (year if year else None))
+    where, params = _where(p)
     rows = conn.execute(f"""
-        SELECT substr(date, 1, 7) AS month,
-               SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END) AS income,
-               SUM(CASE WHEN amount < 0 THEN amount ELSE 0 END) AS expenses,
-               SUM(CASE WHEN category = 'Sparen & Investieren' THEN ABS(amount) ELSE 0 END) AS savings
-        FROM transactions {where}
-        GROUP BY month ORDER BY month
+        SELECT substr(t.date, 1, 7) AS month, {KIND} AS kind,
+               SUM(CASE WHEN t.amount > 0 THEN t.amount ELSE 0 END) AS inflow,
+               SUM(CASE WHEN t.amount < 0 THEN -t.amount ELSE 0 END) AS outflow
+        FROM {TX} {where}
+        GROUP BY month, kind ORDER BY month
     """, params).fetchall()
     conn.close()
-    result = []
+
+    by_month: dict[str, dict[str, float]] = {}
     for r in rows:
-        inc = r["income"] or 0
-        exp = abs(r["expenses"] or 0)
-        sav = r["savings"] or 0
+        m = by_month.setdefault(r["month"], {"income": 0.0, "consumption": 0.0, "savings": 0.0})
+        if r["kind"] == "income":
+            m["income"] += (r["inflow"] or 0) - (r["outflow"] or 0)
+        elif r["kind"] == "consumption":
+            m["consumption"] += (r["outflow"] or 0) - (r["inflow"] or 0)
+        elif r["kind"] == "savings":
+            m["savings"] += (r["outflow"] or 0) - (r["inflow"] or 0)
+
+    result = []
+    for m in sorted(by_month):
+        v = by_month[m]
+        inc, con, sav = v["income"], v["consumption"], v["savings"]
         result.append({
-            "month": r["month"],
+            "month": m,
             "income": round(inc, 2),
-            "expenses": round(exp, 2),
+            "consumption": round(con, 2),
+            "expenses": round(con + sav, 2),
             "savings": round(sav, 2),
-            "balance": round(inc - exp, 2),
-            "savings_rate": round((sav / inc * 100) if inc > 0 else 0, 1),
+            "balance": round(inc - con - sav, 2),
+            "savings_rate": round(sav / inc * 100, 1) if inc > 0 else 0.0,
         })
     return result
 
 
-@app.get("/api/stats/comparison")
-def stats_comparison(month: str = Query(None)):
+@app.get("/api/stats/wealth")
+def stats_wealth(period: str = Query(None)):
+    """Kumulierter Vermögensaufbau: Sparsumme über die Zeit plus Sparquote."""
     conn = get_db()
-    if not month:
-        row = conn.execute(
-            "SELECT MAX(substr(date,1,7)) FROM transactions WHERE date != '0000-00-00'"
-        ).fetchone()
-        month = row[0]
-    if not month:
-        conn.close()
-        return {}
+    p = _resolve_period(conn, period)
+    where, params = _where(p)
+    rows = conn.execute(f"""
+        SELECT substr(t.date, 1, 7) AS month, {KIND} AS kind,
+               SUM(CASE WHEN t.amount > 0 THEN t.amount ELSE 0 END) AS inflow,
+               SUM(CASE WHEN t.amount < 0 THEN -t.amount ELSE 0 END) AS outflow
+        FROM {TX} {where}
+        GROUP BY month, kind ORDER BY month
+    """, params).fetchall()
+    goal_row = conn.execute(
+        "SELECT value FROM settings WHERE key = 'savings-goal'"
+    ).fetchone()
+    conn.close()
 
-    year, mon = month.split("-")
-    pm = int(mon) - 1
-    py = int(year)
-    if pm == 0:
-        pm, py = 12, py - 1
-    prev_month = f"{py:04d}-{pm:02d}"
+    by_month: dict[str, dict[str, float]] = {}
+    for r in rows:
+        m = by_month.setdefault(r["month"], {"income": 0.0, "savings": 0.0})
+        if r["kind"] == "income":
+            m["income"] += (r["inflow"] or 0) - (r["outflow"] or 0)
+        elif r["kind"] == "savings":
+            m["savings"] += (r["outflow"] or 0) - (r["inflow"] or 0)
 
-    def get_cats(m):
-        rows = conn.execute("""
-            SELECT category, SUM(ABS(amount)) AS total
-            FROM transactions
-            WHERE date >= ? AND date < ? AND amount < 0 AND category != 'Überweisung'
-            GROUP BY category
-        """, _month_range(m)).fetchall()
-        return {r["category"]: r["total"] for r in rows}
+    points, cumulative = [], 0.0
+    for m in sorted(by_month):
+        v = by_month[m]
+        cumulative += v["savings"]
+        points.append({
+            "month": m,
+            "savings": round(v["savings"], 2),
+            "cumulative": round(cumulative, 2),
+            "income": round(v["income"], 2),
+            "savings_rate": round(v["savings"] / v["income"] * 100, 1) if v["income"] > 0 else 0.0,
+        })
 
-    def get_avg(cat):
-        row = conn.execute("""
-            SELECT AVG(mt) FROM (
-                SELECT SUM(ABS(amount)) AS mt
-                FROM transactions WHERE amount < 0 AND category = ? AND date != '0000-00-00' AND category != 'Überweisung'
-                GROUP BY substr(date,1,7)
-            )
-        """, [cat]).fetchone()
-        return round(row[0] or 0, 2)
+    rates = [pt["savings_rate"] for pt in points]
+    try:
+        goal = float(goal_row["value"]) if goal_row and goal_row["value"] else None
+    except (TypeError, ValueError):
+        goal = None
 
-    current = get_cats(month)
-    previous = get_cats(prev_month)
-    all_cats = set(list(current.keys()) + list(previous.keys()))
+    return {
+        "period": _period_info(p),
+        "goal": goal,
+        "total": round(cumulative, 2),
+        "avg_per_month": round(cumulative / len(points), 2) if points else 0.0,
+        "median_rate": round(analytics.median(rates), 1),
+        "months_goal_met": sum(1 for r in rates if goal is not None and r >= goal),
+        "points": points,
+    }
+
+
+@app.get("/api/stats/comparison")
+def stats_comparison(
+    period: str = Query(None),
+    month: str = Query(None),
+    exclude_outliers: bool = Query(False),
+):
+    """Zeitraum gegen Vorzeitraum, Median und gleitenden Durchschnitt.
+
+    Der Median ist hier aussagekräftiger als der Mittelwert: einzelne große
+    Buchungen (Urlaub, Anschaffungen) ziehen den Mittelwert so weit hoch, dass
+    ein normaler Monat dauerhaft "unter dem Schnitt" liegt.
+    """
+    conn = get_db()
+    p = _resolve_period(conn, period, month)
+    if not p.bounded:
+        latest = _latest_month(conn)
+        if not latest:
+            conn.close()
+            return {}
+        p = periods.month_period(latest)
+    prev = periods.previous(p)
+
+    excl_sql, excl_params = "", []
+    if exclude_outliers:
+        excl_sql, excl_params = _exclude_outliers(*_outlier_context(conn))
+
+    # Alle Monatssummen je Kategorie in EINER Abfrage – vorher war das eine
+    # eigene Aggregat-Abfrage pro Kategorie.
+    clauses = ["t.date != '0000-00-00'", f"{KIND} = 'consumption'"]
+    if excl_sql:
+        clauses.append(excl_sql)
+    rows = conn.execute(f"""
+        SELECT t.category AS category, substr(t.date, 1, 7) AS month,
+               SUM(-t.amount) AS total
+        FROM {TX}
+        WHERE {" AND ".join(clauses)}
+        GROUP BY t.category, month
+    """, excl_params).fetchall()
+    conn.close()
+
+    series: dict[str, dict[str, float]] = {}
+    for r in rows:
+        series.setdefault(r["category"], {})[r["month"]] = r["total"] or 0.0
+
+    cur_months = set(p.months())
+    prev_months = set(prev.months()) if prev else set()
+    n_cur = max(len(cur_months), 1)
 
     result = []
-    for cat in sorted(all_cats):
-        cur = current.get(cat, 0)
-        prev = previous.get(cat, 0)
-        avg = get_avg(cat)
+    for cat, months in series.items():
+        ordered = [months[m] for m in sorted(months)]
+        current = sum(v for m, v in months.items() if m in cur_months)
+        previous_v = sum(v for m, v in months.items() if m in prev_months)
+        med = analytics.median(ordered)
+        avg3 = analytics.moving_average(ordered, 3)[-1] if ordered else 0.0
+        # Nur Monate mit Buchungen zählen: sonst wird ein angebrochenes Jahr
+        # durch zwölf geteilt und liegt scheinbar weit unter dem Median.
+        active = sum(1 for m in months if m in cur_months) or n_cur
+        per_month = current / active
+
+        if current == 0 and previous_v == 0:
+            continue
         result.append({
             "category": cat,
-            "current": round(cur, 2),
-            "previous": round(prev, 2),
-            "average": avg,
-            "diff_prev": round(cur - prev, 2),
-            "diff_avg": round(cur - avg, 2),
+            "current": round(current, 2),
+            "current_per_month": round(per_month, 2),
+            "previous": round(previous_v, 2),
+            "median": round(med, 2),
+            "moving_avg": round(avg3, 2),
+            "diff_prev": round(current - previous_v, 2),
+            "diff_median": round(per_month - med, 2),
+            "pct_vs_median": round((per_month - med) / med * 100, 1) if med > 0 else None,
+            "trend_per_month": round(analytics.trend(ordered), 2),
+            "months_observed": len(ordered),
+            "active_months": active,
         })
+
     result.sort(key=lambda x: x["current"], reverse=True)
-    conn.close()
-    return {"month": month, "prev_month": prev_month, "categories": result}
+    return {
+        "period": _period_info(p),
+        "prev_period": _period_info(prev) if prev else None,
+        "months_in_period": n_cur,
+        "categories": result,
+    }
 
 
 @app.get("/api/stats/recurring")
 def stats_recurring():
+    """Wiederkehrende Zahlungen mit Jahreskosten und Preisänderungen."""
     conn = get_db()
-    rows = conn.execute("""
-        SELECT t.merchant_name, t.category,
-               ROUND(AVG(t.amount), 2) AS avg_amount,
-               ROUND(MIN(t.amount), 2) AS min_amount,
-               ROUND(MAX(t.amount), 2) AS max_amount,
-               COUNT(DISTINCT substr(t.date,1,7)) AS months,
-               MIN(t.date) AS first_date, MAX(t.date) AS last_date,
-               (SELECT t2.amount FROM transactions t2
-                WHERE t2.merchant_name = t.merchant_name AND t2.amount < 0
-                  AND t2.date != '0000-00-00'
-                ORDER BY t2.date DESC LIMIT 1) AS last_amount
-        FROM transactions t
-        WHERE t.merchant_name != '' AND t.merchant_name IS NOT NULL
+    rows = conn.execute(f"""
+        SELECT t.merchant_name AS merchant_name, t.category AS category,
+               t.date AS date, t.amount AS amount, {KIND} AS kind
+        FROM {TX}
+        WHERE t.merchant_name IS NOT NULL AND t.merchant_name != ''
           AND t.amount < 0 AND t.date != '0000-00-00'
-        GROUP BY t.merchant_name
-        HAVING months >= 2
-        ORDER BY months DESC, ABS(avg_amount) DESC
+          AND {KIND} != 'transfer'
+        ORDER BY t.merchant_name, t.date
     """).fetchall()
     conn.close()
-    result = []
+
+    by_merchant: dict[str, list] = {}
     for r in rows:
-        avg = abs(r["avg_amount"] or 0)
-        spread = abs((r["max_amount"] or 0) - (r["min_amount"] or 0))
-        spread_pct = spread / avg if avg > 0 else 0
-        rec_type = "fix" if spread_pct < 0.05 else "variabel"
-        last = abs(r["last_amount"] or 0)
-        price_changed = avg > 0 and abs(last - avg) / avg > 0.10
-        result.append({**dict(r), "type": rec_type, "price_changed": price_changed})
-    return result
+        by_merchant.setdefault(r["merchant_name"], []).append(r)
+
+    result = []
+    for merchant, entries in by_merchant.items():
+        months = sorted({e["date"][:7] for e in entries})
+        if len(months) < 2:
+            continue
+
+        amounts = [abs(e["amount"]) for e in entries]
+        first_date, last_date = entries[0]["date"], entries[-1]["date"]
+        med = analytics.median(amounts)
+        spread = max(amounts) - min(amounts)
+        rec_type = "fix" if med > 0 and spread / med < 0.05 else "variabel"
+
+        # Monatliche Belastung über die tatsächlich abgedeckte Spanne, damit
+        # vierteljährliche Zahlungen nicht wie monatliche aussehen.
+        span = periods.months_between(months[0], months[-1])
+        monthly = sum(amounts) / span if span else 0.0
+
+        # Preisänderung nur bei betragsstabilen Abos auswerten – bei
+        # schwankenden Beträgen (Tanken, Hotels) ist "der Preis ist gestiegen"
+        # keine sinnvolle Aussage, sondern nur die normale Streuung.
+        previous_amounts = amounts[:-1]
+        last_amount = amounts[-1]
+        prev_med = analytics.median(previous_amounts) if previous_amounts else 0.0
+        changed = (rec_type == "fix" and prev_med > 0
+                   and abs(last_amount - prev_med) / prev_med > 0.10)
+
+        # Typischer Abbuchungstag → nächste erwartete Buchung.
+        days = sorted(int(e["date"][8:10]) for e in entries)
+        typical_day = int(analytics.median([float(d) for d in days]))
+        next_expected = periods.next_occurrence(last_date, typical_day)
+
+        result.append({
+            "merchant_name": merchant,
+            "category": entries[-1]["category"],
+            "kind": entries[-1]["kind"],
+            "type": rec_type,
+            "months": len(months),
+            "count": len(entries),
+            "median_amount": round(med, 2),
+            "last_amount": round(last_amount, 2),
+            "min_amount": round(min(amounts), 2),
+            "max_amount": round(max(amounts), 2),
+            "monthly_cost": round(monthly, 2),
+            "yearly_cost": round(monthly * 12, 2),
+            "first_date": first_date,
+            "last_date": last_date,
+            "typical_day": typical_day,
+            "next_expected": next_expected,
+            "price_changed": changed,
+            "price_change": {
+                "from": round(prev_med, 2),
+                "to": round(last_amount, 2),
+                "diff": round(last_amount - prev_med, 2),
+                "pct": round((last_amount - prev_med) / prev_med * 100, 1),
+                "since": last_date,
+            } if changed else None,
+        })
+
+    result.sort(key=lambda x: x["yearly_cost"], reverse=True)
+    # Sparpläne laufen zwar regelmäßig, sind aber keine Kosten – deshalb in den
+    # Summen getrennt ausgewiesen.
+    costs = [r for r in result if r["kind"] == "consumption"]
+    savings_plans = [r for r in result if r["kind"] == "savings"]
+    fixed = [r for r in costs if r["type"] == "fix"]
+    return {
+        "total_yearly":     round(sum(r["yearly_cost"] for r in costs), 2),
+        "total_monthly":    round(sum(r["monthly_cost"] for r in costs), 2),
+        "fixed_monthly":    round(sum(r["monthly_cost"] for r in fixed), 2),
+        "fixed_yearly":     round(sum(r["yearly_cost"] for r in fixed), 2),
+        "fixed_count":      len(fixed),
+        "variable_monthly": round(sum(r["monthly_cost"] for r in costs if r["type"] != "fix"), 2),
+        "savings_monthly":  round(sum(r["monthly_cost"] for r in savings_plans), 2),
+        "price_increases":  sum(1 for r in costs if r["price_changed"] and r["price_change"]["diff"] > 0),
+        "items": result,
+    }
 
 
 @app.get("/api/transactions/suspicious")
@@ -753,9 +1102,27 @@ def list_categories():
 @app.get("/api/categories/detail")
 def list_categories_detail():
     conn = get_db()
-    rows = conn.execute("SELECT name, is_default FROM categories ORDER BY id").fetchall()
+    rows = conn.execute("SELECT name, is_default, kind FROM categories ORDER BY id").fetchall()
     conn.close()
-    return [{"name": r["name"], "is_default": bool(r["is_default"])} for r in rows]
+    return [{"name": r["name"], "is_default": bool(r["is_default"]),
+             "kind": r["kind"] or "consumption"} for r in rows]
+
+
+@app.put("/api/categories/{name}/kind")
+def set_category_kind(name: str, body: dict):
+    """Art einer Kategorie: income | consumption | savings | transfer."""
+    kind = str(body.get("kind", "")).strip()
+    if kind not in VALID_KINDS:
+        raise HTTPException(400, f"Art muss eine von {', '.join(VALID_KINDS)} sein")
+    conn = get_db()
+    try:
+        cur = conn.execute("UPDATE categories SET kind = ? WHERE name = ?", (kind, name))
+        if cur.rowcount == 0:
+            raise HTTPException(404, f"Unbekannte Kategorie: {name}")
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True, "name": name, "kind": kind}
 
 
 @app.post("/api/categories")
@@ -763,9 +1130,13 @@ def create_category(body: dict):
     name = str(body.get("name", "")).strip()
     if not name:
         raise HTTPException(400, "Name erforderlich")
+    kind = str(body.get("kind", "consumption")).strip() or "consumption"
+    if kind not in VALID_KINDS:
+        raise HTTPException(400, f"Art muss eine von {', '.join(VALID_KINDS)} sein")
     conn = get_db()
     try:
-        conn.execute("INSERT INTO categories (name, is_default) VALUES (?, 0)", (name,))
+        conn.execute("INSERT INTO categories (name, is_default, kind) VALUES (?, 0, ?)",
+                     (name, kind))
         conn.commit()
     except sqlite3.IntegrityError:
         raise HTTPException(409, "Kategorie existiert bereits")
@@ -847,26 +1218,29 @@ def delete_budget(category: str):
 
 
 @app.get("/api/budgets/status")
-def budget_status(month: str = Query(None)):
+def budget_status(month: str = Query(None), period: str = Query(None)):
     conn = get_db()
-    if not month:
-        row = conn.execute(
-            "SELECT MAX(substr(date,1,7)) FROM transactions WHERE date != '0000-00-00'"
-        ).fetchone()
-        month = row[0]
-    if not month:
-        conn.close()
-        return {"month": None, "categories": []}
+    p = _resolve_period(conn, period, month)
+    if not p.bounded:
+        latest = _latest_month(conn)
+        if not latest:
+            conn.close()
+            return {"month": None, "period": None, "categories": []}
+        p = periods.month_period(latest)
+
+    # Budgets sind monatlich gedacht – über längere Zeiträume entsprechend
+    # hochgerechnet, damit Soll und Ist vergleichbar bleiben.
+    factor = max(len(p.months()), 1)
 
     budgets = {r["category"]: r["monthly_budget"] for r in
                conn.execute("SELECT category, monthly_budget FROM category_budgets").fetchall()}
 
-    spending = {r["category"]: abs(r["total"]) for r in conn.execute("""
-        SELECT category, SUM(amount) AS total
-        FROM transactions
-        WHERE date >= ? AND date < ? AND amount < 0 AND category != 'Überweisung'
-        GROUP BY category
-    """, _month_range(month)).fetchall()}
+    where, params = _where(p, f"{KIND} = 'consumption'", "t.amount < 0")
+    spending = {r["category"]: abs(r["total"]) for r in conn.execute(f"""
+        SELECT t.category AS category, SUM(t.amount) AS total
+        FROM {TX} {where}
+        GROUP BY t.category
+    """, params).fetchall()}
 
     conn.close()
 
@@ -874,18 +1248,22 @@ def budget_status(month: str = Query(None)):
     seen = set()
     for cat, budget in sorted(budgets.items()):
         spent = spending.get(cat, 0)
+        scaled = budget * factor
         result.append({
             "category": cat,
-            "budget": budget,
+            "budget": round(scaled, 2),
+            "monthly_budget": budget,
             "spent": round(spent, 2),
-            "pct": round(spent / budget * 100, 1) if budget > 0 else 0,
+            "pct": round(spent / scaled * 100, 1) if scaled > 0 else 0,
         })
         seen.add(cat)
     for cat, spent in sorted(spending.items()):
         if cat not in seen:
-            result.append({"category": cat, "budget": None, "spent": round(spent, 2), "pct": None})
+            result.append({"category": cat, "budget": None, "monthly_budget": None,
+                           "spent": round(spent, 2), "pct": None})
 
-    return {"month": month, "categories": result}
+    return {"month": p.start[:7], "period": _period_info(p),
+            "months": factor, "categories": result}
 
 
 # ─── Settings ─────────────────────────────────────────────────────────────────
@@ -956,24 +1334,28 @@ def list_months():
 # ─── Export & Backup ───────────────────────────────────────────────────────────
 
 @app.get("/api/export/csv")
-def export_csv(month: str = Query(None)):
+def export_csv(month: str = Query(None), period: str = Query(None)):
     conn = get_db()
-    where = "WHERE date >= ? AND date < ?" if month else ""
-    params = _month_range(month) if month else []
-    rows = conn.execute(
-        f"SELECT date, merchant_name, description, category, amount, source, account_name, note FROM transactions {where} ORDER BY date DESC",
-        params
-    ).fetchall()
+    p = _resolve_period(conn, period, month)
+    where, params = _where(p, "1=1") if p.bounded else ("", [])
+    rows = conn.execute(f"""
+        SELECT t.date, t.merchant_name, t.description, t.category,
+               COALESCE(c.kind, 'consumption') AS kind,
+               t.amount, t.source, t.account_name, t.note
+        FROM {TX} {where} ORDER BY t.date DESC
+    """, params).fetchall()
     conn.close()
 
     output = io.StringIO()
     writer = csv.writer(output, delimiter=";")
-    writer.writerow(["Datum", "Händler", "Beschreibung", "Kategorie", "Betrag", "Konto", "Quelle", "Notiz"])
+    writer.writerow(["Datum", "Händler", "Beschreibung", "Kategorie", "Art",
+                     "Betrag", "Konto", "Quelle", "Notiz"])
     for r in rows:
         writer.writerow([r["date"], r["merchant_name"] or "", r["description"] or "",
-                         r["category"], r["amount"], r["account_name"], r["source"], r["note"] or ""])
+                         r["category"], r["kind"], r["amount"],
+                         r["account_name"], r["source"], r["note"] or ""])
 
-    filename = f"haushaltsbuch_{month or 'gesamt'}.csv"
+    filename = f"haushaltsbuch_{p.start[:7] if p.bounded else 'gesamt'}.csv"
     return StreamingResponse(
         iter([output.getvalue().encode("utf-8-sig")]),
         media_type="text/csv",
