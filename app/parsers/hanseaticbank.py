@@ -45,9 +45,12 @@ def parse_hanseaticbank_json(content: bytes, account_name: str = "HanseaticBank 
 
         category = categorize_from_hanseatic(hb_category, hb_subcategories)
 
-        # Special case: monthly settlement (Kartenabrechnung) is a payment, not spending
+        # Kartenabrechnung = Zahlungseingang, keine Ausgabe → "Überweisung",
+        # analog zu comdirect (siehe parsers/comdirect.py:_is_kartenabrechnung),
+        # damit sie nicht doppelt zu den bereits erfassten Einzeltransaktionen zählt.
         if "kartenabrechnung" in description.lower():
-            category = "Finanzen & Versicherung"
+            category = "Überweisung"
+            merchant_name = merchant_name or "Kartenabrechnung"
 
         import_hash = _make_hash(account_name, transaction_id, date, amount, description)
 
