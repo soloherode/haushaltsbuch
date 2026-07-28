@@ -276,8 +276,10 @@ tr.is-outlier td:first-child { box-shadow: inset 3px 0 0 var(--orange); }
 .budget-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r2); padding: 22px 26px; margin-bottom: 24px; box-shadow: var(--sh-md); }
 .budget-top { display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 12px; }
 .budget-value { font-size: 28px; font-weight: 800; letter-spacing: -1px; }
-.budget-track { height: 6px; background: var(--sur3); border-radius: 3px; overflow: hidden; }
-.budget-fill  { height: 100%; border-radius: 3px; transition: width .6s cubic-bezier(.4,0,.2,1); }
+.budget-track { height: 6px; background: var(--sur3); border-radius: 3px; overflow: hidden; display: flex; }
+.budget-fill  { height: 100%; transition: width .6s cubic-bezier(.4,0,.2,1); }
+.budget-track .budget-fill:first-child { border-radius: 3px 0 0 3px; }
+.budget-track .budget-fill:last-child  { border-radius: 0 3px 3px 0; }
 .budget-info  { font-size: 12px; color: var(--text2); margin-top: 8px; }
 
 /* ── Sankey ── */
@@ -639,12 +641,15 @@ th.sortable.desc::after { content: '↓'; opacity: .8; color: var(--lime); }
 
     <!-- Budget -->
     <div class="budget-card">
-      <div class="kpi-label">Budget übrig (Einnahmen − Ausgaben)</div>
+      <div class="kpi-label">Budget übrig (Einnahmen − Konsum − Sparen)</div>
       <div class="budget-top">
         <div class="budget-value" id="budget-val">—</div>
         <div style="font-size:12px;color:var(--text2)" id="budget-info"></div>
       </div>
-      <div class="budget-track"><div class="budget-fill" id="budget-bar" style="width:0%"></div></div>
+      <div class="budget-track">
+        <div class="budget-fill" id="budget-bar" style="width:0%"></div>
+        <div class="budget-fill" id="budget-bar-sav" style="width:0%"></div>
+      </div>
     </div>
 
     <!-- Sankey -->
@@ -835,14 +840,14 @@ th.sortable.desc::after { content: '↓'; opacity: .8; color: var(--lime); }
         <div class="table-wrap">
           <table>
             <thead><tr>
-              <th>Kategorie</th>
-              <th style="text-align:right">Aktuell</th>
-              <th style="text-align:right">Vorzeitraum</th>
-              <th style="text-align:right">Diff.</th>
-              <th style="text-align:right" title="Mittlerer Monatswert – robust gegen einzelne Ausreißer">Median/Monat</th>
-              <th style="text-align:right" title="Durchschnitt der letzten 3 Monate">gleit. Ø</th>
-              <th style="text-align:right">vs. Median</th>
-              <th style="text-align:right" title="Veränderung pro Monat aus der Regression">Trend</th>
+              <th class="sortable" data-col="category" onclick="sortBy('cmp-body','category')">Kategorie</th>
+              <th class="sortable" data-col="current" onclick="sortBy('cmp-body','current')" style="text-align:right">Aktuell</th>
+              <th class="sortable" data-col="previous" onclick="sortBy('cmp-body','previous')" style="text-align:right">Vorzeitraum</th>
+              <th class="sortable" data-col="diff_prev" onclick="sortBy('cmp-body','diff_prev')" style="text-align:right">Diff.</th>
+              <th class="sortable" data-col="median" onclick="sortBy('cmp-body','median')" style="text-align:right" title="Mittlerer Monatswert – robust gegen einzelne Ausreißer">Median/Monat</th>
+              <th class="sortable" data-col="moving_avg" onclick="sortBy('cmp-body','moving_avg')" style="text-align:right" title="Durchschnitt der letzten 3 Monate">gleit. Ø</th>
+              <th class="sortable" data-col="pct_vs_median" onclick="sortBy('cmp-body','pct_vs_median')" style="text-align:right">vs. Median</th>
+              <th class="sortable" data-col="trend_per_month" onclick="sortBy('cmp-body','trend_per_month')" style="text-align:right" title="Veränderung pro Monat aus der Regression">Trend</th>
             </tr></thead>
             <tbody id="cmp-body"></tbody>
           </table>
@@ -907,11 +912,16 @@ th.sortable.desc::after { content: '↓'; opacity: .8; color: var(--lime); }
       <div class="card">
         <div class="table-wrap">
           <table>
-            <thead><tr><th>Händler</th><th>Kategorie</th><th>Typ</th>
-              <th style="text-align:right">Median</th>
-              <th style="text-align:right">pro Monat</th>
-              <th style="text-align:right">pro Jahr</th>
-              <th>nächste</th><th>Preisänderung</th></tr></thead>
+            <thead><tr>
+              <th class="sortable" data-col="merchant_name" onclick="sortBy('abo-body','merchant_name')">Händler</th>
+              <th class="sortable" data-col="category" onclick="sortBy('abo-body','category')">Kategorie</th>
+              <th class="sortable" data-col="type" onclick="sortBy('abo-body','type')">Typ</th>
+              <th class="sortable" data-col="median_amount" onclick="sortBy('abo-body','median_amount')" style="text-align:right">Median</th>
+              <th class="sortable" data-col="monthly_cost" onclick="sortBy('abo-body','monthly_cost')" style="text-align:right">pro Monat</th>
+              <th class="sortable" data-col="yearly_cost" onclick="sortBy('abo-body','yearly_cost')" style="text-align:right">pro Jahr</th>
+              <th class="sortable" data-col="next_expected" onclick="sortBy('abo-body','next_expected')">nächste</th>
+              <th class="sortable" data-col="price_pct" onclick="sortBy('abo-body','price_pct')">Preisänderung</th>
+            </tr></thead>
             <tbody id="abo-body"></tbody>
           </table>
         </div>
@@ -1431,20 +1441,28 @@ async function loadDashboard() {
     hero.classList.remove('sq-goal-achieved');
   }
 
-  // Was nach Konsum übrig bleibt (Sparen zählt hier nicht als Ausgabe)
-  const remaining = summary.income - summary.consumption;
-  const spent = summary.consumption;
+  // Was übrig bleibt: Sparen verlässt das Konto genauso wie Konsum und wird
+  // deshalb mit abgezogen. Der Balken zeigt beide Anteile getrennt.
+  const remaining = summary.income - summary.consumption - summary.savings;
   const budVal = document.getElementById('budget-val');
   budVal.textContent = fmt(remaining);
   budVal.style.color = remaining>=0?'var(--lime)':'var(--red)';
+  const barCon = document.getElementById('budget-bar');
+  const barSav = document.getElementById('budget-bar-sav');
   if (summary.income>0) {
-    const pct = Math.min(100,(spent/summary.income)*100);
-    const bar = document.getElementById('budget-bar');
-    bar.style.width = pct+'%';
-    bar.style.background = pct>100?'var(--red)':pct>80?'var(--orange)':'var(--lime)';
-    document.getElementById('budget-info').textContent = `${fmt(spent)} von ${fmt(summary.income)} (${pct.toFixed(0)} %)`;
+    const pctCon = (summary.consumption/summary.income)*100;
+    const pctSav = (summary.savings/summary.income)*100;
+    // Zusammen nie über 100 % zeichnen, sonst läuft der Balken über.
+    const scale = Math.min(1, 100/Math.max(1, pctCon+pctSav));
+    barCon.style.width = (pctCon*scale)+'%';
+    barSav.style.width = (pctSav*scale)+'%';
+    barCon.style.background = (pctCon+pctSav)>100?'var(--red)':(pctCon+pctSav)>80?'var(--orange)':'var(--lime)';
+    barSav.style.background = 'var(--teal)';
+    document.getElementById('budget-info').textContent =
+      `${fmt(summary.consumption)} Konsum + ${fmt(summary.savings)} Sparen ` +
+      `von ${fmt(summary.income)} (${(pctCon+pctSav).toFixed(0)} %)`;
   } else {
-    document.getElementById('budget-bar').style.width='0%';
+    barCon.style.width='0%'; barSav.style.width='0%';
     document.getElementById('budget-info').textContent='';
   }
 
@@ -1689,10 +1707,52 @@ function setSort(col) {
 }
 
 function updateSortHeaders() {
-  document.querySelectorAll('th.sortable').forEach(th => {
+  // Nur die Transaktionstabelle – die Statistik-Tabellen sortieren sich selbst.
+  document.querySelectorAll('#page-transactions th.sortable').forEach(th => {
     th.classList.remove('asc','desc');
     if (th.dataset.col === txSort_) th.classList.add(txDir_);
   });
+}
+
+// ── Sortierbare Statistik-Tabellen ─────────────────────────────────────────────
+// Diese Tabellen sind vollständig geladen, es wird also im Browser sortiert
+// statt neu abgefragt.
+const tableState = {};
+
+function cmpVals(a, b) {
+  const na = (a === null || a === undefined), nb = (b === null || b === undefined);
+  if (na && nb) return 0;
+  if (na) return -1;            // Leerwerte immer ans Ende der Absteigend-Sortierung
+  if (nb) return 1;
+  if (typeof a === 'number' && typeof b === 'number') return a - b;
+  return String(a).localeCompare(String(b), 'de', {numeric: true});
+}
+
+function renderSortable(tbodyId) {
+  const st = tableState[tbodyId];
+  const factor = st.dir === 'asc' ? 1 : -1;
+  const rows = [...st.rows].sort((a, b) => cmpVals(a[st.sort], b[st.sort]) * factor);
+  const tbody = document.getElementById(tbodyId);
+  tbody.innerHTML = rows.length ? rows.map(st.render).join('') : st.empty;
+  tbody.closest('table').querySelectorAll('th.sortable').forEach(th => {
+    th.classList.remove('asc', 'desc');
+    if (th.dataset.col === st.sort) th.classList.add(st.dir);
+  });
+}
+
+function sortableTable(tbodyId, rows, render, empty, defaultSort) {
+  const st = tableState[tbodyId] || (tableState[tbodyId] = {sort: defaultSort, dir: 'desc'});
+  Object.assign(st, {rows, render, empty});
+  renderSortable(tbodyId);
+}
+
+function sortBy(tbodyId, col) {
+  const st = tableState[tbodyId];
+  if (!st) return;
+  if (st.sort === col) st.dir = st.dir === 'asc' ? 'desc' : 'asc';
+  // Zahlen zuerst absteigend (das Größte oben), Text aufsteigend (A→Z).
+  else { st.sort = col; st.dir = typeof st.rows[0]?.[col] === 'number' ? 'desc' : 'asc'; }
+  renderSortable(tbodyId);
 }
 
 async function loadTx() {
@@ -1925,7 +1985,7 @@ async function loadComparison() {
          : `„Median/Monat" ist der typische Monatswert über die ganze Historie – robuster als ein Mittelwert, ` +
            `weil einzelne Großausgaben ihn nicht verschieben.`);
 
-  document.getElementById('cmp-body').innerHTML = data.categories.map(r=>{
+  sortableTable('cmp-body', data.categories, r => {
     const pct = r.pct_vs_median;
     const pctTxt = pct===null ? '—'
       : `<span class="${pct>0?'negative':pct<0?'positive':''}">${pct>0?'+':''}${pct.toFixed(0)} %</span>`;
@@ -1940,7 +2000,8 @@ async function loadComparison() {
       <td style="text-align:right">${pctTxt}</td>
       <td style="text-align:right" class="${tr>0?'trend-up':tr<0?'trend-down':''}">${tr>0?'+':''}${fmt(tr)}</td>
     </tr>`;
-  }).join('');
+  }, '<tr><td colspan="8" style="color:var(--text2);text-align:center;padding:20px">Keine Daten im Zeitraum</td></tr>',
+     'current');
 }
 
 async function loadRecurring() {
@@ -1952,8 +2013,9 @@ async function loadRecurring() {
   document.getElementById('abo-sav').textContent = fmt(data.savings_monthly);
   document.getElementById('abo-inc').textContent = data.price_increases;
 
-  const items = data.items;
-  document.getElementById('abo-body').innerHTML = items.length ? items.map(r=>{
+  // Preisänderung als Zahl mitführen, damit die Spalte sortierbar ist.
+  const items = data.items.map(r => ({...r, price_pct: r.price_change ? r.price_change.pct : null}));
+  sortableTable('abo-body', items, r => {
     const pc = r.price_change;
     const pcTxt = pc
       ? `<span class="${pc.diff>0?'negative':'positive'}">${fmt(pc.from)} → ${fmt(pc.to)} (${pc.pct>0?'+':''}${pc.pct.toFixed(0)} %)</span>`
@@ -1968,8 +2030,8 @@ async function loadRecurring() {
       <td style="color:var(--text3);white-space:nowrap">${r.next_expected}</td>
       <td style="white-space:nowrap">${pcTxt}</td>
     </tr>`;
-  }).join('')
-  : '<tr><td colspan="8" style="color:var(--text2);text-align:center;padding:20px">Keine wiederkehrenden Buchungen</td></tr>';
+  }, '<tr><td colspan="8" style="color:var(--text2);text-align:center;padding:20px">Keine wiederkehrenden Buchungen</td></tr>',
+     'yearly_cost');
 }
 
 // ── Vermögensaufbau ────────────────────────────────────────────────────────────
