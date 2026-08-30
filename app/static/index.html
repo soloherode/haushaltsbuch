@@ -2224,10 +2224,10 @@ function updateImportUI() {
   const hint  = document.getElementById('import-hint');
   const inp   = document.getElementById('f-unified');
   if (src === 'hanseaticbank') {
-    label.textContent = 'JSON-Datei hierher ziehen';
+    label.textContent = 'PDF-Datei hierher ziehen';
     icon.textContent  = '📋';
-    hint.textContent  = 'JSON-Export der HanseaticBank (Browser-DevConsole)';
-    inp.accept = '.json';
+    hint.textContent  = 'Abrechnungs-PDF der HanseaticBank (Kontoauszug GenialCard)';
+    inp.accept = '.pdf';
   } else {
     label.textContent = 'CSV-Datei hierher ziehen';
     icon.textContent  = '📄';

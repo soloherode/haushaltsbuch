@@ -16,7 +16,7 @@ from app import analytics, auth, periods
 from app.database import init_db, get_db, DB_PATH, VALID_KINDS
 from app.categories import CATEGORIES
 from app.parsers.comdirect import parse_comdirect_csv
-from app.parsers.hanseaticbank import parse_hanseaticbank_json
+from app.parsers.hanseaticbank import parse_hanseaticbank_pdf
 
 
 @asynccontextmanager
@@ -246,7 +246,7 @@ async def import_comdirect(file: UploadFile = File(...)):
 async def import_hanseaticbank(file: UploadFile = File(...)):
     content = await file.read()
     try:
-        transactions = parse_hanseaticbank_json(content)
+        transactions = parse_hanseaticbank_pdf(content)
     except Exception as e:
         raise HTTPException(400, f"Fehler beim Parsen: {e}")
     return _insert_transactions(transactions)
