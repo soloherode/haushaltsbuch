@@ -908,7 +908,7 @@ th.sortable.desc::after { content: '↓'; opacity: .8; color: var(--lime); }
         <div class="kpi"><div class="kpi-dot blue"></div><div class="kpi-label">Preiserhöhungen</div>
           <div class="kpi-value blue" id="abo-inc">—</div><div class="kpi-sub">bei festen Abos</div></div>
       </div>
-      <div class="card" style="margin-bottom:16px"><p style="color:var(--text3);font-size:13px">Händler mit Buchungen in mindestens zwei Monaten. „Fix“ = Betrag schwankt unter 5 %.</p></div>
+      <div class="card" style="margin-bottom:16px"><p style="color:var(--text3);font-size:13px">Händler mit Buchungen in mindestens zwei Monaten. „Fix“ = Betrag schwankt unter 5 % – lässt sich per Klick auf den Typ übersteuern, z. B. wenn ein Abo trotz Preiserhöhung fix bleiben soll. Fix eingestufte Positionen fließen mit ihrem erwarteten Betrag in die Monatshochrechnung ein.</p></div>
       <div class="card">
         <div class="table-wrap">
           <table>
@@ -1389,14 +1389,18 @@ async function loadDashboard() {
   document.getElementById('sum-consumption').textContent = fmt(summary.consumption);
   document.getElementById('sum-savings').textContent     = fmt(summary.savings);
   const perMonth = (v) => months > 1 ? `${fmt(v/months)} / Monat (${months} Mon.)` : '';
-  document.getElementById('kpi-income-sub').textContent  = perMonth(summary.income);
-  document.getElementById('kpi-expense-sub').textContent = perMonth(summary.consumption);
-  document.getElementById('kpi-savings-sub').textContent = perMonth(summary.savings);
+  // Läuft der gewählte Zeitraum gerade noch, liefert die API eine grobe
+  // Hochrechnung aufs Ende – sonst ist forecast null (Ist-Werte sind final).
+  const fc = summary.forecast;
+  const withForecast = (base, val) => fc ? `${base}${base?' · ':''}Prognose ~${fmt(val)}` : base;
+  document.getElementById('kpi-income-sub').textContent      = withForecast(perMonth(summary.income), fc?.income);
+  document.getElementById('kpi-expense-sub').textContent     = withForecast(perMonth(summary.consumption), fc?.consumption);
+  document.getElementById('kpi-savings-sub').textContent     = withForecast(perMonth(summary.savings), fc?.savings);
   const balEl = document.getElementById('sum-balance');
   balEl.textContent = fmt(summary.balance);
   balEl.className = 'kpi-value ' + (summary.balance>=0?'lime':'red');
-  document.getElementById('kpi-balance-sub').textContent =
-    summary.transfers > 0 ? `${fmt(summary.transfers)} Umbuchungen ausgeklammert` : '';
+  document.getElementById('kpi-balance-sub').textContent = withForecast(
+    summary.transfers > 0 ? `${fmt(summary.transfers)} Umbuchungen ausgeklammert` : '', fc?.balance);
 
   // Sparquote – kommt jetzt aus der Kategorie-Art, nicht mehr aus einem Namen
   const sav = summary.savings;
@@ -1409,9 +1413,12 @@ async function loadDashboard() {
 
   document.getElementById('sq-pct').textContent = sqPct.toFixed(1)+' %';
   document.getElementById('sq-pct').style.color = sqColor;
-  document.getElementById('sq-sub').textContent = summary.income>0
+  const sqBase = summary.income>0
     ? `${fmt(sav)} gespart von ${fmt(summary.income)} Einnahmen`
     : 'Keine Einnahmen im Zeitraum';
+  document.getElementById('sq-sub').textContent = fc
+    ? `${sqBase} · Prognose ~${fc.savings_rate.toFixed(1)} %`
+    : sqBase;
   const sqBar = document.getElementById('sq-bar');
   sqBar.style.width = Math.min(100,sqPct)+'%';
   sqBar.style.background = sqColor;
@@ -2020,10 +2027,16 @@ async function loadRecurring() {
     const pcTxt = pc
       ? `<span class="${pc.diff>0?'negative':'positive'}">${fmt(pc.from)} → ${fmt(pc.to)} (${pc.pct>0?'+':''}${pc.pct.toFixed(0)} %)</span>`
       : '<span style="color:var(--text3)">—</span>';
+    const mEsc = esc(r.merchant_name).replace(/'/g,"\\'");
+    const typeCell = `
+      <span class="chip ${r.type==='fix'?'chip-std':'chip-user'}" style="cursor:pointer"
+            title="Klicken zum Umschalten" onclick="toggleRecurringType('${mEsc}','${r.type}')">${r.type==='fix'?'Fix':'Variabel'}</span>
+      ${r.type_overridden ? `<button class="linklike" style="margin-left:4px;font-size:11px;color:var(--text3);cursor:pointer;background:none;border:none"
+            title="Automatische Erkennung wiederherstellen" onclick="resetRecurringType('${mEsc}',event)">↺</button>` : ''}`;
     return `<tr>
       <td>${esc(r.merchant_name)}${r.kind==='savings'?'<span class="chip chip-std" style="margin-left:6px">Sparplan</span>':''}</td>
       <td style="color:var(--text3)">${esc(r.category)}</td>
-      <td><span class="chip ${r.type==='fix'?'chip-std':'chip-user'}">${r.type==='fix'?'Fix':'Variabel'}</span></td>
+      <td>${typeCell}</td>
       <td style="text-align:right;color:var(--red)">${fmt(r.median_amount)}</td>
       <td style="text-align:right">${fmt(r.monthly_cost)}</td>
       <td style="text-align:right;font-weight:600">${fmt(r.yearly_cost)}</td>
@@ -2032,6 +2045,20 @@ async function loadRecurring() {
     </tr>`;
   }, '<tr><td colspan="8" style="color:var(--text2);text-align:center;padding:20px">Keine wiederkehrenden Buchungen</td></tr>',
      'yearly_cost');
+}
+
+async function toggleRecurringType(merchant, currentType) {
+  const next = currentType === 'fix' ? 'variabel' : 'fix';
+  await api(`/api/recurring/${encodeURIComponent(merchant)}/type`, {
+    method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({type: next})
+  });
+  loadRecurring();
+}
+
+async function resetRecurringType(merchant, ev) {
+  ev.stopPropagation();
+  await api(`/api/recurring/${encodeURIComponent(merchant)}/type`, {method: 'DELETE'});
+  loadRecurring();
 }
 
 // ── Vermögensaufbau ────────────────────────────────────────────────────────────
@@ -2314,6 +2341,18 @@ async function loadBudget() {
     const pct    = hasExisting ? Math.min(c.pct, 100) : 0;
     const color  = c.pct > 100 ? 'var(--red)' : c.pct > 80 ? 'var(--orange)' : 'var(--lime)';
     const catEsc = esc(c.category).replace(/'/g,"\\'");
+    // Hochrechnung nur, wenn der gewählte Monat gerade läuft (dann liefert
+    // die API einen Wert; bei abgeschlossenen Monaten ist sie null).
+    let forecastHtml = '';
+    if (c.forecast !== null && c.forecast !== undefined) {
+      const fColor = hasExisting
+        ? (c.forecast_pct > 100 ? 'var(--red)' : c.forecast_pct > 80 ? 'var(--orange)' : 'var(--text2)')
+        : 'var(--text3)';
+      const fLabel = hasExisting
+        ? `Prognose: ~${fmt(c.forecast)} (${c.forecast_pct.toFixed(0)} %)`
+        : `Prognose: ~${fmt(c.forecast)}`;
+      forecastHtml = `<div style="font-size:11px;color:${fColor};margin-top:2px">${fLabel}</div>`;
+    }
     return `<div class="card" style="margin-bottom:10px">
       <div class="budget-item">
         <div class="budget-item-name">${esc(c.category)}</div>
@@ -2325,7 +2364,8 @@ async function loadBudget() {
             </div>
             <div class="budget-track"><div class="budget-fill" style="width:${pct}%;background:${color}"></div></div>
             <div style="font-size:11px;color:var(--text2);margin-top:4px">von ${fmt(c.budget)}</div>
-          ` : `<div style="font-size:12px;color:var(--text3)">${fmt(c.spent)} ausgegeben · kein Budget gesetzt</div>`}
+            ${forecastHtml}
+          ` : `<div style="font-size:12px;color:var(--text3)">${fmt(c.spent)} ausgegeben · kein Budget gesetzt</div>${forecastHtml}`}
         </div>
         <div class="budget-item-controls">
           <input type="number" class="budget-inp" value="${hasExisting ? c.budget : ''}" placeholder="Betrag" step="10" min="0">

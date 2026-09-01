@@ -160,29 +160,76 @@ def months_between(first: str, last: str) -> int:
     return (ly * 12 + lm) - (fy * 12 + fm) + 1
 
 
-def next_occurrence(last_date: str, day_of_month: int, today: str | None = None) -> str:
-    """Nächster erwarteter Termin am typischen Abbuchungstag.
+def _day_in_month(year: int, month: int, day: int) -> str:
+    """Datum im gegebenen Monat am gewünschten Tag, kurze Monate abgefangen
+    (der 31. wird im Februar zum 28./29.)."""
+    from datetime import date
+    for d in range(min(day, 31), 0, -1):
+        try:
+            return date(year, month, d).isoformat()
+        except ValueError:
+            continue
+    return f"{year:04d}-{month:02d}-01"
 
-    Läuft so weit vor, bis der Termin in der Zukunft liegt – sonst schlägt die
-    Abo-Übersicht Termine vor, die längst vorbei sind.
+
+def next_occurrence(last_date: str, day_of_month: int, today: str | None = None) -> str:
+    """Nächster erwarteter Termin am typischen Abbuchungstag, STRIKT nach heute.
+
+    Für die Anzeige gedacht ("wann kommt die nächste Abbuchung") – ein Termin,
+    der genau heute fällig, aber noch nicht gebucht ist, zählt hier bewusst
+    nicht: sonst schlägt die Abo-Übersicht Termine vor, die längst hätten
+    passieren müssen, aber vermutlich nur schlicht noch nicht importiert
+    wurden. Für "fällt ein Termin in einen bestimmten Zeitraum" (Hochrechnung)
+    ist das die falsche Frage – siehe `expected_in_period`.
     """
     from datetime import date
     ref = today or date.today().isoformat()
     y, m = int(last_date[:4]), int(last_date[5:7])
     for step in range(1, 25):
         ny, nm = _add_months(y, m, step)
-        # Kurze Monate abfangen: der 31. wird im Februar zum 28./29.
-        for day in range(min(day_of_month, 31), 0, -1):
-            try:
-                candidate = date(ny, nm, day).isoformat()
-                break
-            except ValueError:
-                continue
-        else:
-            candidate = f"{ny:04d}-{nm:02d}-01"
+        candidate = _day_in_month(ny, nm, day_of_month)
         if candidate > ref:
             return candidate
     return candidate
+
+
+def expected_in_period(period: Period, day_of_month: int) -> str | None:
+    """Datum des Fixkosten-Termins im ersten Monat des Zeitraums, falls er
+    hineinfällt – anders als `next_occurrence` OHNE Ausschluss des heutigen
+    Tages: eine Miete, die heute fällig, aber noch nicht gebucht ist, gilt
+    hier als "im Zeitraum erwartet". Grundlage für die Fixkosten-Hochrechnung.
+    Deckt nur den ersten Monat ab; bei mehrmonatigen Zeiträumen (Quartal o.ä.)
+    werden spätere Fälligkeiten hier bewusst nicht mitgezählt.
+    """
+    if not period.bounded:
+        return None
+    y, m = int(period.start[:4]), int(period.start[5:7])
+    candidate = _day_in_month(y, m, day_of_month)
+    return candidate if period.start <= candidate < period.end else None
+
+
+def elapsed_fraction(period: Period, today: str | None = None) -> float | None:
+    """Anteil eines Zeitraums, der bis heute bereits vergangen ist.
+
+    Grundlage für Hochrechnungen ("bei aktuellem Tempo..."). None, wenn der
+    Zeitraum gerade nicht läuft (unbegrenzt, noch nicht begonnen oder schon
+    vorbei) – dort ist eine Hochrechnung sinnlos: es liegen entweder noch gar
+    keine oder schon die endgültigen Daten vor.
+    """
+    if not period.bounded:
+        return None
+    from datetime import date
+    ref = today or date.today().isoformat()
+    if ref < period.start or ref >= period.end:
+        return None
+    start = date.fromisoformat(period.start)
+    end = date.fromisoformat(period.end)
+    now = date.fromisoformat(ref)
+    total_days = (end - start).days
+    if total_days <= 0:
+        return None
+    elapsed_days = (now - start).days + 1   # heute zählt als vergangener Tag
+    return min(elapsed_days / total_days, 1.0)
 
 
 def previous(period: Period) -> Period | None:

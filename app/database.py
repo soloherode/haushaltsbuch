@@ -114,6 +114,14 @@ def init_db():
         );
 
         CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
+
+        -- Manuelle Übersteuerung, ob ein Händler als "fix" oder "variabel"
+        -- gilt (sonst automatisch über die Betragsschwankung geschätzt).
+        -- Fließt in die Fixkosten-Hochrechnung ein.
+        CREATE TABLE IF NOT EXISTS merchant_overrides (
+            merchant_name  TEXT PRIMARY KEY,
+            recurring_type TEXT NOT NULL CHECK (recurring_type IN ('fix', 'variabel'))
+        );
     """)
     conn.commit()
 

@@ -636,6 +636,8 @@ def stats_summary(period: str = Query(None), month: str = Query(None)):
     active = conn.execute(f"""
         SELECT COUNT(DISTINCT substr(t.date, 1, 7)) FROM {TX} {where}
     """, params).fetchone()[0]
+    fraction = periods.elapsed_fraction(p)
+    fixed_ctx = _fixed_forecast_context(conn, p, fraction)
     conn.close()
 
     agg = {r["kind"]: r for r in rows}
@@ -665,6 +667,102 @@ def stats_summary(period: str = Query(None), month: str = Query(None)):
         "count":        count,
         "active_months": active,
         "period":       _period_info(p),
+        "forecast":     _forecast(fraction, income, consumption, savings, fixed_ctx),
+    }
+
+
+def _forecast(fraction: float | None, income: float, consumption: float, savings: float,
+              fixed_ctx: dict | None) -> dict | None:
+    """Hochrechnung aufs Ende eines noch laufenden Zeitraums.
+
+    Für Konsum und Sparen wird geblendet: bekannte Fixkosten (Miete, Abos,
+    Sparpläne – siehe `_fixed_forecast_context`) fließen mit ihrem tatsächlich
+    erwarteten Betrag ein statt hochskaliert zu werden, der Rest weiter linear
+    nach Tages-Anteil. Sonst würde eine Miete, die gerade eben gebucht wurde,
+    mit dem vollen Monatsfaktor multipliziert. Einnahmen bleiben rein linear
+    (Gehaltstermine erkennt die Recurring-Logik nicht, sie zählt nur negative
+    Beträge). None außerhalb eines laufenden Zeitraums.
+    """
+    if not fraction or fraction >= 1:
+        return None
+    actual_fixed = fixed_ctx["actual_by_kind"] if fixed_ctx else {}
+    projected_fixed = fixed_ctx["projected_by_kind"] if fixed_ctx else {}
+
+    def blend(total: float, kind: str) -> float:
+        variable = total - actual_fixed.get(kind, 0.0)
+        return projected_fixed.get(kind, 0.0) + variable / fraction
+
+    f_income = income / fraction
+    f_consumption = blend(consumption, "consumption")
+    f_savings = blend(savings, "savings")
+    return {
+        "elapsed_fraction": round(fraction, 3),
+        "income":       round(f_income, 2),
+        "consumption":  round(f_consumption, 2),
+        "savings":      round(f_savings, 2),
+        "balance":      round(f_income - f_consumption - f_savings, 2),
+        "savings_rate": round(f_savings / f_income * 100, 1) if f_income > 0 else 0.0,
+    }
+
+
+def _fixed_forecast_context(conn, p: periods.Period, fraction: float | None) -> dict | None:
+    """Erwartete Fixkosten für den laufenden Zeitraum, getrennt von variablen
+    Ausgaben – Grundlage für eine realistischere Hochrechnung als reine
+    Tages-Pace-Projektion (die sonst eine Miete, die gerade am 1. gebucht
+    wurde, ×30 hochrechnet – oder eine erst am 28. fällige Miete komplett
+    unterschlägt).
+
+    Für jeden als "fix" eingestuften Händler (Automatik oder manuelle
+    Übersteuerung, siehe `_recurring_items`) zählt entweder die tatsächliche
+    Buchung in diesem Zeitraum, oder – falls die nächste erwartete Buchung
+    noch in den Zeitraum fällt, aber noch nicht gebucht wurde – der übliche
+    Betrag als Erwartungswert.
+    """
+    if not fraction or fraction >= 1:
+        return None
+    fix_merchants = {r["merchant_name"]: r for r in _recurring_items(conn) if r["type"] == "fix"}
+    if not fix_merchants:
+        return None
+
+    where, params = _where(p, "t.amount < 0", f"{KIND} != 'transfer'", "t.merchant_name IS NOT NULL")
+    rows = conn.execute(f"""
+        SELECT t.merchant_name AS merchant_name, SUM(-t.amount) AS total
+        FROM {TX} {where}
+        GROUP BY t.merchant_name
+    """, params).fetchall()
+
+    actual_by_merchant = {r["merchant_name"]: (r["total"] or 0.0)
+                           for r in rows if r["merchant_name"] in fix_merchants}
+
+    actual_by_cat: dict[str, float] = {}
+    actual_by_kind: dict[str, float] = {}
+    for name, amt in actual_by_merchant.items():
+        info = fix_merchants[name]
+        actual_by_cat[info["category"]] = actual_by_cat.get(info["category"], 0.0) + amt
+        actual_by_kind[info["kind"]] = actual_by_kind.get(info["kind"], 0.0) + amt
+
+    projected_by_cat = dict(actual_by_cat)
+    projected_by_kind = dict(actual_by_kind)
+    pending = []
+    for name, info in fix_merchants.items():
+        if name in actual_by_merchant:
+            continue  # in diesem Zeitraum schon gebucht
+        # `next_expected` ist bewusst "heute"-exklusiv (siehe periods.next_occurrence)
+        # und für die Anzeige gedacht – hier zählt stattdessen, ob der übliche
+        # Tag irgendwo im Zeitraum liegt, auch wenn das heute wäre.
+        expected = periods.expected_in_period(p, info["typical_day"])
+        if expected:
+            projected_by_cat[info["category"]] = projected_by_cat.get(info["category"], 0.0) + info["median_amount"]
+            projected_by_kind[info["kind"]] = projected_by_kind.get(info["kind"], 0.0) + info["median_amount"]
+            pending.append({"merchant_name": name, "category": info["category"],
+                             "amount": info["median_amount"], "expected": expected})
+
+    return {
+        "actual_by_category":    actual_by_cat,
+        "projected_by_category": projected_by_cat,
+        "actual_by_kind":        actual_by_kind,
+        "projected_by_kind":     projected_by_kind,
+        "pending":               pending,
     }
 
 
@@ -971,10 +1069,16 @@ def stats_comparison(
     }
 
 
-@app.get("/api/stats/recurring")
-def stats_recurring():
-    """Wiederkehrende Zahlungen mit Jahreskosten und Preisänderungen."""
-    conn = get_db()
+def _recurring_items(conn) -> list[dict]:
+    """Wiederkehrende Zahlungen je Händler, inkl. manueller Fix/Variabel-Übersteuerung.
+
+    Ausgelagert aus `stats_recurring`, damit die Fixkosten-Hochrechnung
+    (`_fixed_forecast_context`) dieselbe Klassifizierung nutzt statt eine
+    zweite, potenziell abweichende Logik zu pflegen.
+    """
+    overrides = {r["merchant_name"]: r["recurring_type"] for r in
+                 conn.execute("SELECT merchant_name, recurring_type FROM merchant_overrides").fetchall()}
+
     rows = conn.execute(f"""
         SELECT t.merchant_name AS merchant_name, t.category AS category,
                t.date AS date, t.amount AS amount, {KIND} AS kind
@@ -984,7 +1088,6 @@ def stats_recurring():
           AND {KIND} != 'transfer'
         ORDER BY t.merchant_name, t.date
     """).fetchall()
-    conn.close()
 
     by_merchant: dict[str, list] = {}
     for r in rows:
@@ -1000,7 +1103,9 @@ def stats_recurring():
         first_date, last_date = entries[0]["date"], entries[-1]["date"]
         med = analytics.median(amounts)
         spread = max(amounts) - min(amounts)
-        rec_type = "fix" if med > 0 and spread / med < 0.05 else "variabel"
+        auto_type = "fix" if med > 0 and spread / med < 0.05 else "variabel"
+        override = overrides.get(merchant)
+        rec_type = override if override in ("fix", "variabel") else auto_type
 
         # Monatliche Belastung über die tatsächlich abgedeckte Spanne, damit
         # vierteljährliche Zahlungen nicht wie monatliche aussehen.
@@ -1026,6 +1131,8 @@ def stats_recurring():
             "category": entries[-1]["category"],
             "kind": entries[-1]["kind"],
             "type": rec_type,
+            "type_auto": auto_type,
+            "type_overridden": override is not None and override != auto_type,
             "months": len(months),
             "count": len(entries),
             "median_amount": round(med, 2),
@@ -1047,6 +1154,15 @@ def stats_recurring():
                 "since": last_date,
             } if changed else None,
         })
+    return result
+
+
+@app.get("/api/stats/recurring")
+def stats_recurring():
+    """Wiederkehrende Zahlungen mit Jahreskosten und Preisänderungen."""
+    conn = get_db()
+    result = _recurring_items(conn)
+    conn.close()
 
     result.sort(key=lambda x: x["yearly_cost"], reverse=True)
     # Sparpläne laufen zwar regelmäßig, sind aber keine Kosten – deshalb in den
@@ -1065,6 +1181,33 @@ def stats_recurring():
         "price_increases":  sum(1 for r in costs if r["price_changed"] and r["price_change"]["diff"] > 0),
         "items": result,
     }
+
+
+@app.put("/api/recurring/{merchant_name}/type")
+def set_recurring_type(merchant_name: str, body: dict):
+    """Manuelle Fix/Variabel-Einstufung eines Händlers, übersteuert die Automatik."""
+    rtype = str(body.get("type", "")).strip()
+    if rtype not in ("fix", "variabel"):
+        raise HTTPException(400, "Art muss 'fix' oder 'variabel' sein")
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO merchant_overrides (merchant_name, recurring_type) VALUES (?, ?) "
+        "ON CONFLICT(merchant_name) DO UPDATE SET recurring_type = excluded.recurring_type",
+        (merchant_name, rtype)
+    )
+    conn.commit()
+    conn.close()
+    return {"ok": True, "merchant_name": merchant_name, "type": rtype}
+
+
+@app.delete("/api/recurring/{merchant_name}/type")
+def clear_recurring_type(merchant_name: str):
+    """Übersteuerung entfernen – zurück zur automatischen Einstufung."""
+    conn = get_db()
+    conn.execute("DELETE FROM merchant_overrides WHERE merchant_name = ?", (merchant_name,))
+    conn.commit()
+    conn.close()
+    return {"ok": True}
 
 
 @app.get("/api/transactions/suspicious")
@@ -1242,28 +1385,48 @@ def budget_status(month: str = Query(None), period: str = Query(None)):
         GROUP BY t.category
     """, params).fetchall()}
 
+    # Nur gesetzt, wenn `p` gerade läuft – Hochrechnung für abgeschlossene
+    # Monate wäre gegenstandslos, die Ist-Werte sind dort schon final.
+    fraction = periods.elapsed_fraction(p)
+    fixed_ctx = _fixed_forecast_context(conn, p, fraction)
     conn.close()
+
+    def _forecast_spent(cat: str, spent: float) -> float | None:
+        # Bekannte Fixkosten dieser Kategorie fließen mit ihrem erwarteten
+        # Betrag ein, der Rest weiter linear nach Tages-Anteil – siehe
+        # `_forecast` für die Begründung.
+        if not fraction or fraction >= 1:
+            return None
+        actual_fixed = fixed_ctx["actual_by_category"].get(cat, 0.0) if fixed_ctx else 0.0
+        projected_fixed = fixed_ctx["projected_by_category"].get(cat, 0.0) if fixed_ctx else 0.0
+        variable = spent - actual_fixed
+        return round(projected_fixed + variable / fraction, 2)
 
     result = []
     seen = set()
     for cat, budget in sorted(budgets.items()):
         spent = spending.get(cat, 0)
         scaled = budget * factor
+        forecast = _forecast_spent(cat, spent)
         result.append({
             "category": cat,
             "budget": round(scaled, 2),
             "monthly_budget": budget,
             "spent": round(spent, 2),
             "pct": round(spent / scaled * 100, 1) if scaled > 0 else 0,
+            "forecast": forecast,
+            "forecast_pct": round(forecast / scaled * 100, 1) if forecast is not None and scaled > 0 else None,
         })
         seen.add(cat)
     for cat, spent in sorted(spending.items()):
         if cat not in seen:
             result.append({"category": cat, "budget": None, "monthly_budget": None,
-                           "spent": round(spent, 2), "pct": None})
+                           "spent": round(spent, 2), "pct": None,
+                           "forecast": _forecast_spent(cat, spent), "forecast_pct": None})
 
     return {"month": p.start[:7], "period": _period_info(p),
-            "months": factor, "categories": result}
+            "months": factor, "elapsed_fraction": round(fraction, 3) if fraction else None,
+            "categories": result}
 
 
 # ─── Settings ─────────────────────────────────────────────────────────────────
