@@ -712,40 +712,44 @@ def _fixed_forecast_context(conn, p: periods.Period, fraction: float | None) -> 
     wurde, ×30 hochrechnet – oder eine erst am 28. fällige Miete komplett
     unterschlägt).
 
-    Für jeden als "fix" eingestuften Händler (Automatik oder manuelle
-    Übersteuerung, siehe `_recurring_items`) zählt entweder die tatsächliche
-    Buchung in diesem Zeitraum, oder – falls die nächste erwartete Buchung
-    noch in den Zeitraum fällt, aber noch nicht gebucht wurde – der übliche
-    Betrag als Erwartungswert.
+    Für jeden als "fix" eingestuften Posten (Händler + Kategorie, Automatik
+    oder manuelle Übersteuerung, siehe `_recurring_items`) zählt entweder die
+    tatsächliche Buchung in diesem Zeitraum, oder – falls die nächste
+    erwartete Buchung noch in den Zeitraum fällt, aber noch nicht gebucht
+    wurde – der übliche Betrag als Erwartungswert.
     """
     if not fraction or fraction >= 1:
         return None
-    fix_merchants = {r["merchant_name"]: r for r in _recurring_items(conn) if r["type"] == "fix"}
-    if not fix_merchants:
+    fix_items = {(r["merchant_name"], r["category"]): r for r in _recurring_items(conn) if r["type"] == "fix"}
+    if not fix_items:
         return None
 
+    # Gruppierung nach (Händler, Kategorie), NICHT nur Händler: comdirect
+    # vergibt bei Eigenüberweisungen (Miete/Lebensmittel/Sparen an sich
+    # selbst) denselben merchant_name für völlig verschiedene Buchungen –
+    # nur über die Kategorie lassen sie sich sauber trennen.
     where, params = _where(p, "t.amount < 0", f"{KIND} != 'transfer'", "t.merchant_name IS NOT NULL")
     rows = conn.execute(f"""
-        SELECT t.merchant_name AS merchant_name, SUM(-t.amount) AS total
+        SELECT t.merchant_name AS merchant_name, t.category AS category, SUM(-t.amount) AS total
         FROM {TX} {where}
-        GROUP BY t.merchant_name
+        GROUP BY t.merchant_name, t.category
     """, params).fetchall()
 
-    actual_by_merchant = {r["merchant_name"]: (r["total"] or 0.0)
-                           for r in rows if r["merchant_name"] in fix_merchants}
+    actual_by_item = {(r["merchant_name"], r["category"]): (r["total"] or 0.0)
+                       for r in rows if (r["merchant_name"], r["category"]) in fix_items}
 
     actual_by_cat: dict[str, float] = {}
     actual_by_kind: dict[str, float] = {}
-    for name, amt in actual_by_merchant.items():
-        info = fix_merchants[name]
+    for key, amt in actual_by_item.items():
+        info = fix_items[key]
         actual_by_cat[info["category"]] = actual_by_cat.get(info["category"], 0.0) + amt
         actual_by_kind[info["kind"]] = actual_by_kind.get(info["kind"], 0.0) + amt
 
     projected_by_cat = dict(actual_by_cat)
     projected_by_kind = dict(actual_by_kind)
     pending = []
-    for name, info in fix_merchants.items():
-        if name in actual_by_merchant:
+    for key, info in fix_items.items():
+        if key in actual_by_item:
             continue  # in diesem Zeitraum schon gebucht
         # `next_expected` ist bewusst "heute"-exklusiv (siehe periods.next_occurrence)
         # und für die Anzeige gedacht – hier zählt stattdessen, ob der übliche
@@ -754,7 +758,7 @@ def _fixed_forecast_context(conn, p: periods.Period, fraction: float | None) -> 
         if expected:
             projected_by_cat[info["category"]] = projected_by_cat.get(info["category"], 0.0) + info["median_amount"]
             projected_by_kind[info["kind"]] = projected_by_kind.get(info["kind"], 0.0) + info["median_amount"]
-            pending.append({"merchant_name": name, "category": info["category"],
+            pending.append({"merchant_name": info["merchant_name"], "category": info["category"],
                              "amount": info["median_amount"], "expected": expected})
 
     return {
@@ -1070,14 +1074,21 @@ def stats_comparison(
 
 
 def _recurring_items(conn) -> list[dict]:
-    """Wiederkehrende Zahlungen je Händler, inkl. manueller Fix/Variabel-Übersteuerung.
+    """Wiederkehrende Zahlungen je (Händler, Kategorie), inkl. manueller
+    Fix/Variabel-Übersteuerung.
+
+    Gruppierung NICHT nur nach Händlername: comdirect vergibt bei
+    Eigenüberweisungen (Miete/Lebensmittel/Sparen-Transfer auf das eigene
+    Konto) allen denselben merchant_name – ohne die Kategorie mit in den
+    Schlüssel zu nehmen, würden so drei verschiedene, aber gleich benannte
+    Buchungsströme zu einem einzigen (falschen) Median/Betrag verschmelzen.
 
     Ausgelagert aus `stats_recurring`, damit die Fixkosten-Hochrechnung
     (`_fixed_forecast_context`) dieselbe Klassifizierung nutzt statt eine
     zweite, potenziell abweichende Logik zu pflegen.
     """
-    overrides = {r["merchant_name"]: r["recurring_type"] for r in
-                 conn.execute("SELECT merchant_name, recurring_type FROM merchant_overrides").fetchall()}
+    overrides = {(r["merchant_name"], r["category"]): r["recurring_type"] for r in
+                 conn.execute("SELECT merchant_name, category, recurring_type FROM merchant_overrides").fetchall()}
 
     rows = conn.execute(f"""
         SELECT t.merchant_name AS merchant_name, t.category AS category,
@@ -1086,15 +1097,15 @@ def _recurring_items(conn) -> list[dict]:
         WHERE t.merchant_name IS NOT NULL AND t.merchant_name != ''
           AND t.amount < 0 AND t.date != '0000-00-00'
           AND {KIND} != 'transfer'
-        ORDER BY t.merchant_name, t.date
+        ORDER BY t.merchant_name, t.category, t.date
     """).fetchall()
 
-    by_merchant: dict[str, list] = {}
+    by_item: dict[tuple[str, str], list] = {}
     for r in rows:
-        by_merchant.setdefault(r["merchant_name"], []).append(r)
+        by_item.setdefault((r["merchant_name"], r["category"]), []).append(r)
 
     result = []
-    for merchant, entries in by_merchant.items():
+    for (merchant, category), entries in by_item.items():
         months = sorted({e["date"][:7] for e in entries})
         if len(months) < 2:
             continue
@@ -1104,7 +1115,7 @@ def _recurring_items(conn) -> list[dict]:
         med = analytics.median(amounts)
         spread = max(amounts) - min(amounts)
         auto_type = "fix" if med > 0 and spread / med < 0.05 else "variabel"
-        override = overrides.get(merchant)
+        override = overrides.get((merchant, category))
         rec_type = override if override in ("fix", "variabel") else auto_type
 
         # Monatliche Belastung über die tatsächlich abgedeckte Spanne, damit
@@ -1128,7 +1139,7 @@ def _recurring_items(conn) -> list[dict]:
 
         result.append({
             "merchant_name": merchant,
-            "category": entries[-1]["category"],
+            "category": category,
             "kind": entries[-1]["kind"],
             "type": rec_type,
             "type_auto": auto_type,
@@ -1183,28 +1194,34 @@ def stats_recurring():
     }
 
 
-@app.put("/api/recurring/{merchant_name}/type")
-def set_recurring_type(merchant_name: str, body: dict):
-    """Manuelle Fix/Variabel-Einstufung eines Händlers, übersteuert die Automatik."""
+@app.put("/api/recurring/{merchant_name}/{category}/type")
+def set_recurring_type(merchant_name: str, category: str, body: dict):
+    """Manuelle Fix/Variabel-Einstufung eines Postens, übersteuert die Automatik.
+
+    Schlüssel ist Händler + Kategorie, nicht nur der Händler: derselbe
+    merchant_name kann (v. a. bei comdirect-Eigenüberweisungen) mehrere,
+    völlig unterschiedliche wiederkehrende Buchungen bündeln.
+    """
     rtype = str(body.get("type", "")).strip()
     if rtype not in ("fix", "variabel"):
         raise HTTPException(400, "Art muss 'fix' oder 'variabel' sein")
     conn = get_db()
     conn.execute(
-        "INSERT INTO merchant_overrides (merchant_name, recurring_type) VALUES (?, ?) "
-        "ON CONFLICT(merchant_name) DO UPDATE SET recurring_type = excluded.recurring_type",
-        (merchant_name, rtype)
+        "INSERT INTO merchant_overrides (merchant_name, category, recurring_type) VALUES (?, ?, ?) "
+        "ON CONFLICT(merchant_name, category) DO UPDATE SET recurring_type = excluded.recurring_type",
+        (merchant_name, category, rtype)
     )
     conn.commit()
     conn.close()
-    return {"ok": True, "merchant_name": merchant_name, "type": rtype}
+    return {"ok": True, "merchant_name": merchant_name, "category": category, "type": rtype}
 
 
-@app.delete("/api/recurring/{merchant_name}/type")
-def clear_recurring_type(merchant_name: str):
+@app.delete("/api/recurring/{merchant_name}/{category}/type")
+def clear_recurring_type(merchant_name: str, category: str):
     """Übersteuerung entfernen – zurück zur automatischen Einstufung."""
     conn = get_db()
-    conn.execute("DELETE FROM merchant_overrides WHERE merchant_name = ?", (merchant_name,))
+    conn.execute("DELETE FROM merchant_overrides WHERE merchant_name = ? AND category = ?",
+                 (merchant_name, category))
     conn.commit()
     conn.close()
     return {"ok": True}

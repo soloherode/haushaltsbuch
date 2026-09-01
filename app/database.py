@@ -115,15 +115,57 @@ def init_db():
 
         CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
 
-        -- Manuelle Übersteuerung, ob ein Händler als "fix" oder "variabel"
+        -- Manuelle Übersteuerung, ob ein Posten als "fix" oder "variabel"
         -- gilt (sonst automatisch über die Betragsschwankung geschätzt).
-        -- Fließt in die Fixkosten-Hochrechnung ein.
+        -- Fließt in die Fixkosten-Hochrechnung ein. Schlüssel ist Händler +
+        -- Kategorie, nicht nur der Händler: comdirect vergibt bei
+        -- Eigenüberweisungen (Miete/Lebensmittel/Sparen an sich selbst)
+        -- denselben merchant_name für völlig unterschiedliche Buchungen.
         CREATE TABLE IF NOT EXISTS merchant_overrides (
-            merchant_name  TEXT PRIMARY KEY,
-            recurring_type TEXT NOT NULL CHECK (recurring_type IN ('fix', 'variabel'))
+            merchant_name  TEXT NOT NULL,
+            category       TEXT NOT NULL,
+            recurring_type TEXT NOT NULL CHECK (recurring_type IN ('fix', 'variabel')),
+            PRIMARY KEY (merchant_name, category)
         );
     """)
     conn.commit()
+
+    # Migration: frühere Version dieser Tabelle hatte merchant_name als
+    # alleinigen Schlüssel – zu grob, siehe Kommentar oben. Bestehende
+    # Übersteuerungen werden auf die Kategorie übernommen, die zum Zeitpunkt
+    # der Einstufung angezeigt wurde (jüngste Buchung dieses Händlers),
+    # damit sie nicht kommentarlos verloren gehen.
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(merchant_overrides)").fetchall()]
+    if "category" not in cols:
+        old_rows = conn.execute("SELECT merchant_name, recurring_type FROM merchant_overrides").fetchall()
+        conn.execute("ALTER TABLE merchant_overrides RENAME TO merchant_overrides_old")
+        conn.execute("""
+            CREATE TABLE merchant_overrides (
+                merchant_name  TEXT NOT NULL,
+                category       TEXT NOT NULL,
+                recurring_type TEXT NOT NULL CHECK (recurring_type IN ('fix', 'variabel')),
+                PRIMARY KEY (merchant_name, category)
+            )
+        """)
+        for row in old_rows:
+            # `id DESC` als Tiebreaker bei gleichem Datum (z. B. mehrere
+            # Buchungen desselben Eigenüberweisungs-Namens am Gehaltstag) –
+            # reproduziert damit exakt, welche Kategorie die alte, jetzt
+            # entfernte Logik (ORDER BY date ASC, letzter Listeneintrag) zum
+            # Zeitpunkt der Einstufung angezeigt hat.
+            cat_row = conn.execute("""
+                SELECT category FROM transactions
+                WHERE merchant_name = ? AND date != '0000-00-00'
+                ORDER BY date DESC, id DESC LIMIT 1
+            """, (row["merchant_name"],)).fetchone()
+            if cat_row:
+                conn.execute(
+                    "INSERT OR IGNORE INTO merchant_overrides (merchant_name, category, recurring_type) "
+                    "VALUES (?, ?, ?)",
+                    (row["merchant_name"], cat_row["category"], row["recurring_type"])
+                )
+        conn.execute("DROP TABLE merchant_overrides_old")
+        conn.commit()
 
     # Migrations
     for stmt in [

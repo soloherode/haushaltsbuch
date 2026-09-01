@@ -2028,11 +2028,12 @@ async function loadRecurring() {
       ? `<span class="${pc.diff>0?'negative':'positive'}">${fmt(pc.from)} → ${fmt(pc.to)} (${pc.pct>0?'+':''}${pc.pct.toFixed(0)} %)</span>`
       : '<span style="color:var(--text3)">—</span>';
     const mEsc = esc(r.merchant_name).replace(/'/g,"\\'");
+    const cEsc = esc(r.category).replace(/'/g,"\\'");
     const typeCell = `
       <span class="chip ${r.type==='fix'?'chip-std':'chip-user'}" style="cursor:pointer"
-            title="Klicken zum Umschalten" onclick="toggleRecurringType('${mEsc}','${r.type}')">${r.type==='fix'?'Fix':'Variabel'}</span>
+            title="Klicken zum Umschalten" onclick="toggleRecurringType('${mEsc}','${cEsc}','${r.type}')">${r.type==='fix'?'Fix':'Variabel'}</span>
       ${r.type_overridden ? `<button class="linklike" style="margin-left:4px;font-size:11px;color:var(--text3);cursor:pointer;background:none;border:none"
-            title="Automatische Erkennung wiederherstellen" onclick="resetRecurringType('${mEsc}',event)">↺</button>` : ''}`;
+            title="Automatische Erkennung wiederherstellen" onclick="resetRecurringType('${mEsc}','${cEsc}',event)">↺</button>` : ''}`;
     return `<tr>
       <td>${esc(r.merchant_name)}${r.kind==='savings'?'<span class="chip chip-std" style="margin-left:6px">Sparplan</span>':''}</td>
       <td style="color:var(--text3)">${esc(r.category)}</td>
@@ -2047,17 +2048,17 @@ async function loadRecurring() {
      'yearly_cost');
 }
 
-async function toggleRecurringType(merchant, currentType) {
+async function toggleRecurringType(merchant, category, currentType) {
   const next = currentType === 'fix' ? 'variabel' : 'fix';
-  await api(`/api/recurring/${encodeURIComponent(merchant)}/type`, {
+  await api(`/api/recurring/${encodeURIComponent(merchant)}/${encodeURIComponent(category)}/type`, {
     method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({type: next})
   });
   loadRecurring();
 }
 
-async function resetRecurringType(merchant, ev) {
+async function resetRecurringType(merchant, category, ev) {
   ev.stopPropagation();
-  await api(`/api/recurring/${encodeURIComponent(merchant)}/type`, {method: 'DELETE'});
+  await api(`/api/recurring/${encodeURIComponent(merchant)}/${encodeURIComponent(category)}/type`, {method: 'DELETE'});
   loadRecurring();
 }
 
