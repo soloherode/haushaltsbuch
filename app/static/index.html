@@ -1389,18 +1389,23 @@ async function loadDashboard() {
   document.getElementById('sum-consumption').textContent = fmt(summary.consumption);
   document.getElementById('sum-savings').textContent     = fmt(summary.savings);
   const perMonth = (v) => months > 1 ? `${fmt(v/months)} / Monat (${months} Mon.)` : '';
-  // Läuft der gewählte Zeitraum gerade noch, liefert die API eine grobe
-  // Hochrechnung aufs Ende – sonst ist forecast null (Ist-Werte sind final).
+  // Läuft der gewählte Zeitraum gerade noch, liefert die API eine Hochrechnung
+  // fürs Monatsende – nur für Konsum/Bilanz: Einnahmen und Sparen sind fast
+  // immer diskrete Termine (Gehalt, Sparplan-Abbuchung) statt einer übers
+  // Monat verteilten Größe, eine Pace-Hochrechnung würde sie nur verzerren.
   const fc = summary.forecast;
-  const withForecast = (base, val) => fc ? `${base}${base?' · ':''}Prognose ~${fmt(val)}` : base;
-  document.getElementById('kpi-income-sub').textContent      = withForecast(perMonth(summary.income), fc?.income);
-  document.getElementById('kpi-expense-sub').textContent     = withForecast(perMonth(summary.consumption), fc?.consumption);
-  document.getElementById('kpi-savings-sub').textContent     = withForecast(perMonth(summary.savings), fc?.savings);
+  document.getElementById('kpi-income-sub').textContent  = perMonth(summary.income);
+  document.getElementById('kpi-expense-sub').textContent = fc
+    ? `${perMonth(summary.consumption)}${months>1?' · ':''}Prognose ~${fmt(fc.consumption)}`
+    : perMonth(summary.consumption);
+  document.getElementById('kpi-savings-sub').textContent = perMonth(summary.savings);
   const balEl = document.getElementById('sum-balance');
   balEl.textContent = fmt(summary.balance);
   balEl.className = 'kpi-value ' + (summary.balance>=0?'lime':'red');
-  document.getElementById('kpi-balance-sub').textContent = withForecast(
-    summary.transfers > 0 ? `${fmt(summary.transfers)} Umbuchungen ausgeklammert` : '', fc?.balance);
+  const balBase = summary.transfers > 0 ? `${fmt(summary.transfers)} Umbuchungen ausgeklammert` : '';
+  document.getElementById('kpi-balance-sub').textContent = fc
+    ? `${balBase}${balBase?' · ':''}Prognose ~${fmt(fc.balance)}`
+    : balBase;
 
   // Sparquote – kommt jetzt aus der Kategorie-Art, nicht mehr aus einem Namen
   const sav = summary.savings;
@@ -1413,12 +1418,9 @@ async function loadDashboard() {
 
   document.getElementById('sq-pct').textContent = sqPct.toFixed(1)+' %';
   document.getElementById('sq-pct').style.color = sqColor;
-  const sqBase = summary.income>0
+  document.getElementById('sq-sub').textContent = summary.income>0
     ? `${fmt(sav)} gespart von ${fmt(summary.income)} Einnahmen`
     : 'Keine Einnahmen im Zeitraum';
-  document.getElementById('sq-sub').textContent = fc
-    ? `${sqBase} · Prognose ~${fc.savings_rate.toFixed(1)} %`
-    : sqBase;
   const sqBar = document.getElementById('sq-bar');
   sqBar.style.width = Math.min(100,sqPct)+'%';
   sqBar.style.background = sqColor;

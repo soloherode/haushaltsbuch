@@ -673,35 +673,33 @@ def stats_summary(period: str = Query(None), month: str = Query(None)):
 
 def _forecast(fraction: float | None, income: float, consumption: float, savings: float,
               fixed_ctx: dict | None) -> dict | None:
-    """Hochrechnung aufs Ende eines noch laufenden Zeitraums.
+    """Hochrechnung aufs Ende eines noch laufenden Zeitraums – nur für Konsum.
 
-    Für Konsum und Sparen wird geblendet: bekannte Fixkosten (Miete, Abos,
-    Sparpläne – siehe `_fixed_forecast_context`) fließen mit ihrem tatsächlich
-    erwarteten Betrag ein statt hochskaliert zu werden, der Rest weiter linear
-    nach Tages-Anteil. Sonst würde eine Miete, die gerade eben gebucht wurde,
-    mit dem vollen Monatsfaktor multipliziert. Einnahmen bleiben rein linear
-    (Gehaltstermine erkennt die Recurring-Logik nicht, sie zählt nur negative
-    Beträge). None außerhalb eines laufenden Zeitraums.
+    Konsum ist die einzige Größe, die sich sinnvoll hochrechnen lässt: viele
+    kleine, echt variable Buchungen (Tanken, Einkaufen) verteilen sich übers
+    ganze Monat, bekannte Fixkosten fließen mit ihrem tatsächlich erwarteten
+    Betrag ein statt hochskaliert zu werden (siehe `_fixed_forecast_context`) –
+    sonst würde eine Miete, die gerade eben gebucht wurde, mit dem vollen
+    Monatsfaktor multipliziert.
+
+    Einnahmen und Sparen sind dagegen fast immer diskrete Ereignisse
+    (Gehaltstermin, Sparplan-Abbuchung an einem festen Tag) statt einer
+    übers Monat verteilten Größe – eine Tages-Pace-Hochrechnung macht sie nur
+    künstlich riesig oder winzig, je nachdem ob der Termin schon war. Deshalb
+    bleiben sie hier unverändert (Ist-Werte), nur die Bilanz nutzt die
+    Konsum-Hochrechnung.
     """
     if not fraction or fraction >= 1:
         return None
     actual_fixed = fixed_ctx["actual_by_kind"] if fixed_ctx else {}
     projected_fixed = fixed_ctx["projected_by_kind"] if fixed_ctx else {}
 
-    def blend(total: float, kind: str) -> float:
-        variable = total - actual_fixed.get(kind, 0.0)
-        return projected_fixed.get(kind, 0.0) + variable / fraction
-
-    f_income = income / fraction
-    f_consumption = blend(consumption, "consumption")
-    f_savings = blend(savings, "savings")
+    variable_consumption = consumption - actual_fixed.get("consumption", 0.0)
+    f_consumption = projected_fixed.get("consumption", 0.0) + variable_consumption / fraction
     return {
         "elapsed_fraction": round(fraction, 3),
-        "income":       round(f_income, 2),
-        "consumption":  round(f_consumption, 2),
-        "savings":      round(f_savings, 2),
-        "balance":      round(f_income - f_consumption - f_savings, 2),
-        "savings_rate": round(f_savings / f_income * 100, 1) if f_income > 0 else 0.0,
+        "consumption": round(f_consumption, 2),
+        "balance":     round(income - f_consumption - savings, 2),
     }
 
 
