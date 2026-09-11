@@ -6,7 +6,10 @@
       "Bash(pip3 install:*)",
       "Bash(curl -s -X POST http://127.0.0.1:8000/api/import/comdirect -F \"file=@/Users/shalm/Downloads/umsaetze_1182859809_20260401-1936.csv\")",
       "Bash(curl -s http://127.0.0.1:8000/api/stats/summary)",
-      "Bash(curl -s http://127.0.0.1:8000/api/months)"
+      "Bash(curl -s http://127.0.0.1:8000/api/months)",
+      "Bash(git push *)",
+      "Bash(sqlite3 haushaltsbuch.db \"select count\\(*\\) from transactions; select min\\(date\\), max\\(date\\) from transactions;\")",
+      "Bash(python3 -c ' *)"
     ]
   }
 }

@@ -78,9 +78,26 @@ def recurring_merchants(rows) -> set[str]:
     wenn sie für ihre Kategorie groß ist – sonst meldet die Liste jeden Monat
     dieselbe Miete.
     """
-    months: dict[str, set] = {}
-    for r in rows:
-        name = r["merchant_name"]
-        if name:
-            months.setdefault(name, set()).add(r["date"][:7])
-    return {m for m, ms in months.items() if len(ms) >= RECURRING_MIN_MONTHS}
+    grouped = {}
+    for row in rows:
+        if row["merchant_name"]:
+            grouped.setdefault(row["merchant_name"], []).append(row)
+    result = set()
+    for name, entries in grouped.items():
+        months = {r["date"][:7] for r in entries}
+        amounts = [abs(r["amount"]) for r in entries]
+        med = median(amounts)
+        if (len(months) >= RECURRING_MIN_MONTHS and len(entries) == len(months)
+                and med > 0 and (max(amounts) - min(amounts)) / med < .05):
+            result.add(name)
+    return result
+
+
+def calendar_trend(months: list[str], values: list[float]) -> float:
+    """Regression in actual calendar months, retaining gaps in observations."""
+    if len(values) < 2:
+        return 0.0
+    x = [int(m[:4]) * 12 + int(m[5:7]) for m in months]
+    mx, my = sum(x) / len(x), sum(values) / len(values)
+    denominator = sum((v - mx) ** 2 for v in x)
+    return sum((a - mx) * (b - my) for a, b in zip(x, values)) / denominator if denominator else 0.0

@@ -4,6 +4,8 @@ import io
 import os
 import re
 import sqlite3
+import math
+from datetime import date, timedelta
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Query, Request, Response
@@ -194,40 +196,71 @@ def _apply_db_rules(description: str, merchant: str, conn) -> str | None:
 
 def _insert_transactions(transactions: list[dict]) -> dict:
     conn = get_db()
-    # Load learned corrections: merchant → most-used category
-    corrections = {}
-    for row in conn.execute(
-        "SELECT merchant_name, category FROM category_corrections ORDER BY count DESC"
-    ).fetchall():
-        corrections.setdefault(row["merchant_name"], row["category"])
-
-    inserted = 0
-    skipped = 0
-    for t in transactions:
-        # Priority 1: user-defined rules
-        rule_cat = _apply_db_rules(t.get("description", ""), t.get("merchant_name", ""), conn)
-        if rule_cat:
-            t = {**t, "category": rule_cat}
-        # Priority 2: learned corrections
-        elif t.get("merchant_name") and t["merchant_name"] in corrections:
-            t = {**t, "category": corrections[t["merchant_name"]]}
-        try:
+    inserted = skipped = reconciled = 0
+    warnings = []
+    try:
+        for original in transactions:
+            t = dict(original)
+            t["category_origin"] = "parser"
+            # Rules are explicit. Merchant-only historical corrections remain
+            # suggestions: the same recipient may be rent, saving or groceries.
+            rule_cat = _apply_db_rules(t.get("description", ""), t.get("merchant_name", ""), conn)
+            if rule_cat and t["category"] != "Überweisung":
+                t.update(category=rule_cat, category_origin="rule")
+            elif t["category"] != "Überweisung":
+                learned = conn.execute("""SELECT category FROM contextual_corrections
+                    WHERE source = ? AND account_name = ? AND merchant_name = ?
+                    AND description = ? AND direction = ?""",
+                    (t["source"], t["account_name"], t["merchant_name"] or "", t["description"] or "",
+                     1 if t["amount"] > 0 else -1)).fetchone()
+                if learned:
+                    t.update(category=learned["category"], category_origin="learned_context")
+            if conn.execute("SELECT 1 FROM transactions WHERE import_hash = ?", (t["import_hash"],)).fetchone():
+                skipped += 1
+                continue
+            candidates = conn.execute("""
+                SELECT * FROM transactions WHERE source = ? AND account_name = ?
+                AND amount = ? AND description = ? AND booked != ?
+                AND transaction_date IS NOT NULL AND transaction_date = ?
+                AND ABS(julianday(date) - julianday(?)) <= 7
+            """, (t["source"], t["account_name"], t["amount"], t["description"],
+                  t["booked"], t["transaction_date"], t["date"])).fetchall()
+            if len(candidates) == 1:
+                old = candidates[0]
+                if not t["booked"]:
+                    skipped += 1  # A stale export must not revive a pending row.
+                    continue
+                conn.execute("""UPDATE transactions SET date = ?, transaction_date = ?,
+                    booked = 1, import_hash = ?, transaction_type = ? WHERE id = ?""",
+                    (t["date"], t["transaction_date"], t["import_hash"], t["transaction_type"], old["id"]))
+                reconciled += 1
+                continue
+            if len(candidates) > 1:
+                warnings.append("Mehrdeutige Vormerkungen: manueller Abgleich erforderlich")
             conn.execute("""
                 INSERT INTO transactions
                     (source, account_name, date, transaction_date, amount, description,
                      merchant_name, category, subcategory, city, country,
-                     transaction_type, booked, import_hash)
-                VALUES
-                    (:source, :account_name, :date, :transaction_date, :amount, :description,
-                     :merchant_name, :category, :subcategory, :city, :country,
-                     :transaction_type, :booked, :import_hash)
+                     transaction_type, booked, import_hash, category_origin)
+                VALUES (:source, :account_name, :date, :transaction_date, :amount, :description,
+                        :merchant_name, :category, :subcategory, :city, :country,
+                        :transaction_type, :booked, :import_hash, :category_origin)
             """, t)
             inserted += 1
-        except sqlite3.IntegrityError:
-            skipped += 1
-    conn.commit()
-    conn.close()
-    return {"inserted": inserted, "skipped_duplicates": skipped}
+        report = getattr(transactions, "report", None)
+        if transactions and report and report.get("balance_verified") and report.get("period_start"):
+            conn.execute("INSERT OR IGNORE INTO import_coverage VALUES (?, ?, ?, ?)",
+                         (transactions[0]["source"], transactions[0]["account_name"],
+                          report["period_start"], report["period_end"]))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return {"inserted": inserted, "skipped_duplicates": skipped, "reconciled": reconciled,
+            "unclassified": sum(t["category"] == "Sonstiges" for t in transactions),
+            "warnings": sorted(set(warnings)), "statement": getattr(transactions, "report", None)}
 
 
 # ─── Import ────────────────────────────────────────────────────────────────────
@@ -338,13 +371,18 @@ def update_category(tx_id: int, body: dict):
         conn.close()
         raise HTTPException(400, f"Unbekannte Kategorie: {category}")
     # Track correction for smart categorization
-    tx = conn.execute("SELECT merchant_name FROM transactions WHERE id = ?", (tx_id,)).fetchone()
+    tx = conn.execute("SELECT * FROM transactions WHERE id = ?", (tx_id,)).fetchone()
     if tx and tx["merchant_name"]:
+        conn.execute("""INSERT INTO contextual_corrections VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(source, account_name, merchant_name, description, direction)
+            DO UPDATE SET category = excluded.category""",
+            (tx["source"], tx["account_name"], tx["merchant_name"], tx["description"] or "",
+             1 if tx["amount"] > 0 else -1, category))
         conn.execute("""
             INSERT INTO category_corrections (merchant_name, category, count) VALUES (?, ?, 1)
             ON CONFLICT(merchant_name, category) DO UPDATE SET count = count + 1
         """, (tx["merchant_name"], category))
-    conn.execute("UPDATE transactions SET category = ? WHERE id = ?", (category, tx_id))
+    conn.execute("UPDATE transactions SET category = ?, category_locked = 1, category_origin = 'manual' WHERE id = ?", (category, tx_id))
     conn.commit()
     conn.close()
     return {"ok": True}
@@ -353,8 +391,11 @@ def update_category(tx_id: int, body: dict):
 @app.put("/api/transactions/{tx_id}/date")
 def update_date(tx_id: int, body: dict):
     date = body.get("date", "").strip()
-    if not re.match(r"^\d{4}-\d{2}-\d{2}$", date):
-        raise HTTPException(400, "Datum muss im Format YYYY-MM-DD sein")
+    try:
+        from datetime import date as calendar_date
+        calendar_date.fromisoformat(date)
+    except ValueError:
+        raise HTTPException(400, "Ungültiges Datum; erwartet YYYY-MM-DD")
     conn = get_db()
     conn.execute("UPDATE transactions SET date = ? WHERE id = ?", (date, tx_id))
     conn.commit()
@@ -382,7 +423,7 @@ def batch_update_category(body: dict):
         raise HTTPException(400, "Ungültige Anfrage")
     placeholders = ",".join("?" * len(ids))
     conn.execute(
-        f"UPDATE transactions SET category = ? WHERE id IN ({placeholders})",
+        f"UPDATE transactions SET category = ?, category_locked = 1, category_origin = 'manual' WHERE id IN ({placeholders})",
         [category] + list(ids)
     )
     conn.commit()
@@ -393,12 +434,17 @@ def batch_update_category(body: dict):
 @app.post("/api/transactions")
 def create_transaction(body: dict):
     date = body.get("date", "").strip()
-    if not re.match(r"^\d{4}-\d{2}-\d{2}$", date):
-        raise HTTPException(400, "Datum muss im Format YYYY-MM-DD sein")
+    try:
+        from datetime import date as calendar_date
+        calendar_date.fromisoformat(date)
+    except ValueError:
+        raise HTTPException(400, "Ungültiges Datum; erwartet YYYY-MM-DD")
     try:
         amount = float(body.get("amount", 0))
     except (ValueError, TypeError):
         raise HTTPException(400, "Ungültiger Betrag")
+    if not math.isfinite(amount):
+        raise HTTPException(400, "Betrag muss endlich sein")
     description = str(body.get("description", "")).strip()
     account_name = str(body.get("account_name", "Manuell")).strip() or "Manuell"
     raw = f"manual|{account_name}|{date}|{amount}|{description}"
@@ -416,6 +462,7 @@ def create_transaction(body: dict):
                  transaction_type, booked, import_hash)
             VALUES ('manual', ?, ?, NULL, ?, ?, ?, ?, NULL, NULL, NULL, 'manual', 1, ?)
         """, (account_name, date, amount, description, description, category, import_hash))
+        conn.execute("UPDATE transactions SET category_origin = 'manual', category_locked = 1 WHERE id = last_insert_rowid()")
         conn.commit()
         inserted_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
     except sqlite3.IntegrityError:
@@ -483,13 +530,13 @@ def apply_rules_to_all():
         conn.close()
         return {"updated": 0}
 
-    rows = conn.execute("SELECT id, description, merchant_name FROM transactions").fetchall()
+    rows = conn.execute("SELECT id, description, merchant_name FROM transactions WHERE category_locked = 0 AND category_origin != 'legacy'").fetchall()
     updated = 0
     for row in rows:
         text = ((row["description"] or "") + " " + (row["merchant_name"] or "")).lower()
         for rule in rules:
             if rule["pattern"] in text:
-                conn.execute("UPDATE transactions SET category = ? WHERE id = ?", (rule["category"], row["id"]))
+                conn.execute("UPDATE transactions SET category = ?, category_origin = 'rule' WHERE id = ?", (rule["category"], row["id"]))
                 updated += 1
                 break
     conn.commit()
@@ -505,9 +552,99 @@ TX = "transactions t LEFT JOIN categories c ON c.name = t.category"
 KIND = "COALESCE(c.kind, 'consumption')"
 
 
+def _data_quality(conn):
+    accounts = [dict(r) for r in conn.execute("""SELECT source, account_name,
+        MAX(CASE WHEN booked = 1 AND date != '0000-00-00' THEN date END) AS last_booking,
+        SUM(CASE WHEN booked = 0 THEN 1 ELSE 0 END) AS pending,
+        SUM(CASE WHEN category = 'Sonstiges' THEN 1 ELSE 0 END) AS unclassified
+        FROM transactions GROUP BY source, account_name""")]
+    for account in accounts:
+        account["confirmed_through"] = conn.execute(
+            "SELECT MAX(end_date) FROM import_coverage WHERE source = ? AND account_name = ?",
+            (account["source"], account["account_name"])).fetchone()[0]
+    warnings = []
+    cutoff = (date.today() - timedelta(days=3)).isoformat()
+    stale = [a for a in accounts if a["source"] != "manual" and
+             max(a["last_booking"] or "", a["confirmed_through"] or "") < cutoff]
+    if stale:
+        warnings.append("Nicht alle Konten haben aktuelle Buchungen. Prognosen sind bis zum nächsten Import ausgesetzt.")
+    if any(a["pending"] for a in accounts):
+        warnings.append("Vormerkungen sind separat erfasst und nicht in den Ist-Summen enthalten.")
+    if any(a["unclassified"] for a in accounts):
+        warnings.append("Ungeklärte Kategorien: Bitte Sonstiges prüfen.")
+    suspicious = conn.execute("SELECT COUNT(*) FROM categories WHERE name IN ('Einkommen', 'Sparen & Investieren', 'Überweisung') AND kind = 'consumption'").fetchone()[0]
+    if suspicious:
+        warnings.append("Kategoriearten prüfen: Einkommen, Sparen oder Umbuchung ist als Konsum eingestellt.")
+    return {"accounts": accounts, "warnings": warnings,
+            "forecast_ready": bool(accounts) and not stale and not suspicious,
+            "coverage_note": "Letzte Buchung ist kein Nachweis vollständiger Kontoabdeckung."}
+
+
+@app.get("/api/import/coverage")
+def import_coverage():
+    conn = get_db()
+    try:
+        return {"accounts": _data_quality(conn)["accounts"],
+                "periods": [dict(r) for r in conn.execute("SELECT * FROM import_coverage ORDER BY source, account_name, start_date")]}
+    finally:
+        conn.close()
+
+
+@app.post("/api/import/coverage")
+def confirm_import_coverage(body: dict):
+    try:
+        p = periods.custom_period(str(body.get("start", "")), str(body.get("end", "")))
+    except periods.PeriodError as exc:
+        raise HTTPException(400, str(exc))
+    if body["end"] > date.today().isoformat():
+        raise HTTPException(400, "Nur bereits abgeschlossene Tage bestätigen")
+    conn = get_db()
+    try:
+        key = (body.get("source"), body.get("account_name"))
+        if not conn.execute("SELECT 1 FROM transactions WHERE source = ? AND account_name = ?", key).fetchone():
+            raise HTTPException(400, "Unbekanntes Konto")
+        if body.get("remove"):
+            conn.execute("DELETE FROM import_coverage WHERE source = ? AND account_name = ? AND start_date = ? AND end_date = ?", (*key,p.start,body["end"]))
+        else:
+            conn.execute("INSERT OR IGNORE INTO import_coverage VALUES (?, ?, ?, ?)",(*key,p.start,body["end"]))
+        conn.commit()
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+@app.get("/api/stats/forecast-validation")
+def forecast_validation():
+    from app.forecast_validation import evaluate
+    conn = get_db()
+    try:
+        return evaluate(conn)
+    finally:
+        conn.close()
+
+
+@app.get("/api/stats/data-quality")
+def data_quality():
+    conn = get_db()
+    try:
+        return _data_quality(conn)
+    finally:
+        conn.close()
+
+
+def _observed_months(conn, p=periods.ALL):
+    """Zero category spend is valid only in months with account observations.
+
+    Missing entire months stay unknown; calendar_trend preserves their spacing.
+    """
+    where, params = _where(p)
+    return [r[0] for r in conn.execute(
+        f"SELECT DISTINCT substr(t.date, 1, 7) FROM transactions t {where} ORDER BY 1", params)]
+
+
 def _latest_month(conn) -> str | None:
     row = conn.execute(
-        "SELECT MAX(substr(date, 1, 7)) FROM transactions WHERE date != '0000-00-00'"
+        "SELECT MAX(substr(date, 1, 7)) FROM transactions WHERE date != '0000-00-00' AND booked = 1"
     ).fetchone()
     return row[0]
 
@@ -522,7 +659,7 @@ def _resolve_period(conn, period: str | None, month: str | None = None) -> perio
 
 def _where(period: periods.Period, *extra: str) -> tuple[str, list]:
     frag, params = period.where("t.date")
-    clauses = [frag, *[e for e in extra if e]]
+    clauses = [frag, "t.booked = 1", *[e for e in extra if e]]
     return "WHERE " + " AND ".join(clauses), params
 
 
@@ -543,7 +680,7 @@ def _outlier_context(conn) -> tuple[dict[str, float], set[str]]:
         SELECT t.category AS category, t.amount AS amount,
                t.date AS date, t.merchant_name AS merchant_name
         FROM {TX}
-        WHERE t.amount < 0 AND t.date != '0000-00-00' AND {KIND} = 'consumption'
+        WHERE t.booked = 1 AND t.amount < 0 AND t.date != '0000-00-00' AND {KIND} = 'consumption'
     """).fetchall()
     by_cat: dict[str, list[float]] = {}
     for r in rows:
@@ -552,7 +689,7 @@ def _outlier_context(conn) -> tuple[dict[str, float], set[str]]:
 
 
 def _is_outlier(row, thresholds: dict[str, float], recurring: set[str]) -> bool:
-    if (row["amount"] or 0) >= 0:
+    if (row["amount"] or 0) >= 0 or ("booked" in row.keys() and not row["booked"]):
         return False
     # Vormerkposten ohne Datum lassen sich zeitlich nicht einordnen.
     if not row["date"] or row["date"] == "0000-00-00":
@@ -577,7 +714,7 @@ def _outlier_sql(thresholds: dict[str, float], recurring: set[str]) -> tuple[str
         cond = f"(COALESCE(t.merchant_name, '') NOT IN ({placeholders}) AND {cond})"
         params = list(recurring) + params
     # gleiche Bedingung wie in _is_outlier, damit Liste und Statistik übereinstimmen
-    return f"(t.date != '0000-00-00' AND {cond})", params
+    return f"(t.booked = 1 AND t.amount < 0 AND t.date != '0000-00-00' AND {cond})", params
 
 
 def _exclude_outliers(thresholds: dict[str, float], recurring: set[str]) -> tuple[str, list]:
@@ -591,7 +728,7 @@ def stats_outliers(period: str = Query(None), month: str = Query(None)):
     conn = get_db()
     p = _resolve_period(conn, period, month)
     thresholds, recurring = _outlier_context(conn)
-    where, params = _where(p, f"{KIND} = 'consumption'", "t.amount < 0")
+    where, params = _where(p, f"{KIND} = 'consumption'")
     rows = conn.execute(f"""
         SELECT t.id, t.date, t.amount, t.description, t.merchant_name, t.category
         FROM {TX} {where}
@@ -636,7 +773,8 @@ def stats_summary(period: str = Query(None), month: str = Query(None)):
     active = conn.execute(f"""
         SELECT COUNT(DISTINCT substr(t.date, 1, 7)) FROM {TX} {where}
     """, params).fetchone()[0]
-    fraction = periods.elapsed_fraction(p)
+    quality = _data_quality(conn)
+    fraction = periods.elapsed_fraction(p) if quality["forecast_ready"] else None
     fixed_ctx = _fixed_forecast_context(conn, p, fraction)
     conn.close()
 
@@ -663,9 +801,11 @@ def stats_summary(period: str = Query(None), month: str = Query(None)):
         "expenses":     round(consumption + savings, 2),   # gesamter Abfluss
         "balance":      round(income - consumption - savings, 2),
         "savings_rate": round(savings / income * 100, 1) if income > 0 else 0.0,
+        "surplus_rate": round((income - consumption) / income * 100, 1) if income > 0 else None,
         "transfers":    round(tr_in + tr_out, 2),
         "count":        count,
         "active_months": active,
+        "data_quality": quality,
         "period":       _period_info(p),
         "forecast":     _forecast(fraction, income, consumption, savings, fixed_ctx),
     }
@@ -673,7 +813,7 @@ def stats_summary(period: str = Query(None), month: str = Query(None)):
 
 def _forecast(fraction: float | None, income: float, consumption: float, savings: float,
               fixed_ctx: dict | None) -> dict | None:
-    """Hochrechnung aufs Ende eines noch laufenden Zeitraums – nur für Konsum.
+    """Hochrechnung mit diskreten Terminen für Fixkosten, Einkommen und Sparen.
 
     Konsum ist die einzige Größe, die sich sinnvoll hochrechnen lässt: viele
     kleine, echt variable Buchungen (Tanken, Einkaufen) verteilen sich übers
@@ -682,12 +822,8 @@ def _forecast(fraction: float | None, income: float, consumption: float, savings
     sonst würde eine Miete, die gerade eben gebucht wurde, mit dem vollen
     Monatsfaktor multipliziert.
 
-    Einnahmen und Sparen sind dagegen fast immer diskrete Ereignisse
-    (Gehaltstermin, Sparplan-Abbuchung an einem festen Tag) statt einer
-    übers Monat verteilten Größe – eine Tages-Pace-Hochrechnung macht sie nur
-    künstlich riesig oder winzig, je nachdem ob der Termin schon war. Deshalb
-    bleiben sie hier unverändert (Ist-Werte), nur die Bilanz nutzt die
-    Konsum-Hochrechnung.
+    Bekannte Einnahmen und Sparraten werden pro Fälligkeit ergänzt. Nur der
+    variable Konsum wird zeitanteilig hochgerechnet.
     """
     if not fraction or fraction >= 1:
         return None
@@ -695,77 +831,55 @@ def _forecast(fraction: float | None, income: float, consumption: float, savings
     projected_fixed = fixed_ctx["projected_by_kind"] if fixed_ctx else {}
 
     variable_consumption = consumption - actual_fixed.get("consumption", 0.0)
-    f_consumption = projected_fixed.get("consumption", 0.0) + variable_consumption / fraction
+    f_consumption = projected_fixed.get("consumption", 0.0) + max(variable_consumption, 0) / fraction + min(variable_consumption, 0)
+    f_income = income + projected_fixed.get("income", 0) - actual_fixed.get("income", 0)
+    f_savings = savings + projected_fixed.get("savings", 0) - actual_fixed.get("savings", 0)
     return {
+        "income": round(f_income, 2), "savings": round(f_savings, 2),
         "elapsed_fraction": round(fraction, 3),
         "consumption": round(f_consumption, 2),
-        "balance":     round(income - f_consumption - savings, 2),
+        "balance":     round(f_income - f_consumption - f_savings, 2),
     }
 
 
-def _fixed_forecast_context(conn, p: periods.Period, fraction: float | None) -> dict | None:
-    """Erwartete Fixkosten für den laufenden Zeitraum, getrennt von variablen
-    Ausgaben – Grundlage für eine realistischere Hochrechnung als reine
-    Tages-Pace-Projektion (die sonst eine Miete, die gerade am 1. gebucht
-    wurde, ×30 hochrechnet – oder eine erst am 28. fällige Miete komplett
-    unterschlägt).
-
-    Für jeden als "fix" eingestuften Posten (Händler + Kategorie, Automatik
-    oder manuelle Übersteuerung, siehe `_recurring_items`) zählt entweder die
-    tatsächliche Buchung in diesem Zeitraum, oder – falls die nächste
-    erwartete Buchung noch in den Zeitraum fällt, aber noch nicht gebucht
-    wurde – der übliche Betrag als Erwartungswert.
-    """
+def _fixed_forecast_context(conn, p: periods.Period, fraction: float | None, as_of: str | None = None) -> dict | None:
+    """Add every unmatched scheduled occurrence, across all months in a period."""
     if not fraction or fraction >= 1:
         return None
-    fix_items = {(r["merchant_name"], r["category"]): r for r in _recurring_items(conn) if r["type"] == "fix"}
-    if not fix_items:
-        return None
-
-    # Gruppierung nach (Händler, Kategorie), NICHT nur Händler: comdirect
-    # vergibt bei Eigenüberweisungen (Miete/Lebensmittel/Sparen an sich
-    # selbst) denselben merchant_name für völlig verschiedene Buchungen –
-    # nur über die Kategorie lassen sie sich sauber trennen.
-    where, params = _where(p, "t.amount < 0", f"{KIND} != 'transfer'", "t.merchant_name IS NOT NULL")
-    rows = conn.execute(f"""
-        SELECT t.merchant_name AS merchant_name, t.category AS category, SUM(-t.amount) AS total
-        FROM {TX} {where}
-        GROUP BY t.merchant_name, t.category
-    """, params).fetchall()
-
-    actual_by_item = {(r["merchant_name"], r["category"]): (r["total"] or 0.0)
-                       for r in rows if (r["merchant_name"], r["category"]) in fix_items}
-
-    actual_by_cat: dict[str, float] = {}
-    actual_by_kind: dict[str, float] = {}
-    for key, amt in actual_by_item.items():
-        info = fix_items[key]
-        actual_by_cat[info["category"]] = actual_by_cat.get(info["category"], 0.0) + amt
-        actual_by_kind[info["kind"]] = actual_by_kind.get(info["kind"], 0.0) + amt
-
-    projected_by_cat = dict(actual_by_cat)
-    projected_by_kind = dict(actual_by_kind)
+    as_of = as_of or date.today().isoformat()
+    items = [r for r in _recurring_items(conn, as_of=as_of) if r["type"] == "fix"
+             and r["active"] and r["interval_months"]]
+    actual_cat, actual_kind, projected_cat, projected_kind = {}, {}, {}, {}
     pending = []
-    for key, info in fix_items.items():
-        if key in actual_by_item:
-            continue  # in diesem Zeitraum schon gebucht
-        # `next_expected` ist bewusst "heute"-exklusiv (siehe periods.next_occurrence)
-        # und für die Anzeige gedacht – hier zählt stattdessen, ob der übliche
-        # Tag irgendwo im Zeitraum liegt, auch wenn das heute wäre.
-        expected = periods.expected_in_period(p, info["typical_day"])
-        if expected:
-            projected_by_cat[info["category"]] = projected_by_cat.get(info["category"], 0.0) + info["median_amount"]
-            projected_by_kind[info["kind"]] = projected_by_kind.get(info["kind"], 0.0) + info["median_amount"]
-            pending.append({"merchant_name": info["merchant_name"], "category": info["category"],
-                             "amount": info["median_amount"], "expected": expected})
-
-    return {
-        "actual_by_category":    actual_by_cat,
-        "projected_by_category": projected_by_cat,
-        "actual_by_kind":        actual_by_kind,
-        "projected_by_kind":     projected_by_kind,
-        "pending":               pending,
-    }
+    for info in items:
+        cat, kind = info["category"], info["kind"]
+        rows = conn.execute("""SELECT date, amount FROM transactions
+            WHERE source = ? AND account_name = ? AND merchant_name = ? AND category = ?
+            AND booked = 1 AND date >= ? AND date < ? AND date <= ?""",
+            (info["source"], info["account_name"], info["merchant_name"], cat, p.start, p.end, as_of)).fetchall()
+        sign = 1 if kind == "income" else -1
+        actual = sum(sign * r["amount"] for r in rows)
+        actual_cat[cat] = actual_cat.get(cat, 0) + actual
+        actual_kind[kind] = actual_kind.get(kind, 0) + actual
+        expected_total = actual
+        anchor_y, anchor_m = int(info["last_date"][:4]), int(info["last_date"][5:7])
+        for month in p.months():
+            y, m = int(month[:4]), int(month[5:7])
+            if ((y - anchor_y) * 12 + m - anchor_m) % info["interval_months"]:
+                continue
+            expected = periods._day_in_month(y, m, info["typical_day"])
+            if not p.start <= expected < p.end or expected < info["first_date"]:
+                continue
+            if any(r["date"][:7] == month and sign * r["amount"] > 0 for r in rows):
+                continue
+            expected_total += info["last_amount"]
+            pending.append({"merchant_name": info["merchant_name"], "category": cat,
+                            "amount": info["last_amount"], "expected": expected})
+        projected_cat[cat] = projected_cat.get(cat, 0) + expected_total
+        projected_kind[kind] = projected_kind.get(kind, 0) + expected_total
+    return {"actual_by_category": actual_cat, "actual_by_kind": actual_kind,
+            "projected_by_category": projected_cat, "projected_by_kind": projected_kind,
+            "pending": pending}
 
 
 @app.get("/api/stats/categories")
@@ -866,27 +980,22 @@ def stats_timeline(
         excl_sql, excl_params = _exclude_outliers(*_outlier_context(conn))
 
     cat_sql, cat_params = ("t.category = ?", [category]) if category else ("", [])
-    where, params = _where(p, f"{KIND} = 'consumption'", "t.amount < 0", cat_sql, excl_sql)
+    where, params = _where(p, f"{KIND} = 'consumption'", cat_sql, excl_sql)
     rows = conn.execute(f"""
         SELECT substr(t.date, 1, 7) AS month, SUM(-t.amount) AS total
         FROM {TX} {where}
         GROUP BY month ORDER BY month
     """, params + cat_params + excl_params).fetchall()
+    months = _observed_months(conn, p)
     conn.close()
-
-    totals = [r["total"] or 0 for r in rows]
+    by_month = {r["month"]: r["total"] or 0 for r in rows}
+    totals = [by_month.get(m, 0) for m in months]
     avg = analytics.moving_average(totals, window)
-    med = analytics.median(totals)
-    return {
-        "category": category,
-        "median": round(med, 2),
-        "trend_per_month": round(analytics.trend(totals), 2),
-        "window": window,
-        "points": [{"month": r["month"],
-                    "total": round(t, 2),
-                    "moving_avg": round(a, 2)}
-                   for r, t, a in zip(rows, totals, avg)],
-    }
+    return {"category": category, "median": round(analytics.median(totals), 2),
+            "trend_per_month": round(analytics.calendar_trend(months, totals), 2),
+            "window": window,
+            "points": [{"month": m, "total": round(t, 2), "moving_avg": round(a, 2)}
+                       for m, t, a in zip(months, totals, avg)]}
 
 
 @app.get("/api/stats/yearly")
@@ -1011,56 +1120,41 @@ def stats_comparison(
     if exclude_outliers:
         excl_sql, excl_params = _exclude_outliers(*_outlier_context(conn))
 
-    # Alle Monatssummen je Kategorie in EINER Abfrage – vorher war das eine
-    # eigene Aggregat-Abfrage pro Kategorie.
-    clauses = ["t.date != '0000-00-00'", f"{KIND} = 'consumption'"]
-    if excl_sql:
-        clauses.append(excl_sql)
-    rows = conn.execute(f"""
-        SELECT t.category AS category, substr(t.date, 1, 7) AS month,
-               SUM(-t.amount) AS total
-        FROM {TX}
-        WHERE {" AND ".join(clauses)}
-        GROUP BY t.category, month
-    """, excl_params).fetchall()
+    # Exact day boundaries for both current and previous windows. History
+    # ends before the selected window to avoid future-data leakage.
+    where, params = _where(periods.ALL, f"{KIND} = 'consumption'", excl_sql)
+    rows = conn.execute(f"SELECT t.category, t.date, -t.amount AS total FROM {TX} {where}",
+                        params + excl_params).fetchall()
+    observed = _observed_months(conn)
     conn.close()
-
-    series: dict[str, dict[str, float]] = {}
+    series = {}
     for r in rows:
-        series.setdefault(r["category"], {})[r["month"]] = r["total"] or 0.0
-
-    cur_months = set(p.months())
-    prev_months = set(prev.months()) if prev else set()
-    n_cur = max(len(cur_months), 1)
-
+        series.setdefault(r["category"], []).append(r)
+    n_cur = periods.month_weight(p)
+    history_months = [m for m in observed if m < p.start[:7]]
+    current_months = [m for m in observed if m in p.months()]
     result = []
-    for cat, months in series.items():
-        ordered = [months[m] for m in sorted(months)]
-        current = sum(v for m, v in months.items() if m in cur_months)
-        previous_v = sum(v for m, v in months.items() if m in prev_months)
+    for cat, entries in series.items():
+        totals = {}
+        for r in entries:
+            month_key = r["date"][:7]
+            totals[month_key] = totals.get(month_key, 0) + r["total"]
+        ordered = [totals.get(m, 0) for m in history_months]
+        current = sum(r["total"] for r in entries if p.start <= r["date"] < p.end)
+        previous_v = sum(r["total"] for r in entries if prev.start <= r["date"] < prev.end)
         med = analytics.median(ordered)
         avg3 = analytics.moving_average(ordered, 3)[-1] if ordered else 0.0
-        # Nur Monate mit Buchungen zählen: sonst wird ein angebrochenes Jahr
-        # durch zwölf geteilt und liegt scheinbar weit unter dem Median.
-        active = sum(1 for m in months if m in cur_months) or n_cur
-        per_month = current / active
-
+        per_month = current / n_cur if n_cur else 0
         if current == 0 and previous_v == 0:
             continue
-        result.append({
-            "category": cat,
-            "current": round(current, 2),
-            "current_per_month": round(per_month, 2),
-            "previous": round(previous_v, 2),
-            "median": round(med, 2),
-            "moving_avg": round(avg3, 2),
+        result.append({"category": cat, "current": round(current, 2),
+            "current_per_month": round(per_month, 2), "previous": round(previous_v, 2),
+            "median": round(med, 2), "moving_avg": round(avg3, 2),
             "diff_prev": round(current - previous_v, 2),
             "diff_median": round(per_month - med, 2),
             "pct_vs_median": round((per_month - med) / med * 100, 1) if med > 0 else None,
-            "trend_per_month": round(analytics.trend(ordered), 2),
-            "months_observed": len(ordered),
-            "active_months": active,
-        })
+            "trend_per_month": round(analytics.calendar_trend(history_months, ordered), 2),
+            "months_observed": len(ordered), "active_months": len(current_months)})
 
     result.sort(key=lambda x: x["current"], reverse=True)
     return {
@@ -1071,7 +1165,7 @@ def stats_comparison(
     }
 
 
-def _recurring_items(conn) -> list[dict]:
+def _recurring_items(conn, as_of: str | None = None) -> list[dict]:
     """Wiederkehrende Zahlungen je (Händler, Kategorie), inkl. manueller
     Fix/Variabel-Übersteuerung.
 
@@ -1085,25 +1179,27 @@ def _recurring_items(conn) -> list[dict]:
     (`_fixed_forecast_context`) dieselbe Klassifizierung nutzt statt eine
     zweite, potenziell abweichende Logik zu pflegen.
     """
+    as_of = as_of or date.today().isoformat()
     overrides = {(r["merchant_name"], r["category"]): r["recurring_type"] for r in
                  conn.execute("SELECT merchant_name, category, recurring_type FROM merchant_overrides").fetchall()}
 
     rows = conn.execute(f"""
-        SELECT t.merchant_name AS merchant_name, t.category AS category,
+        SELECT t.source, t.account_name, t.merchant_name AS merchant_name, t.category AS category,
                t.date AS date, t.amount AS amount, {KIND} AS kind
         FROM {TX}
         WHERE t.merchant_name IS NOT NULL AND t.merchant_name != ''
-          AND t.amount < 0 AND t.date != '0000-00-00'
-          AND {KIND} != 'transfer'
-        ORDER BY t.merchant_name, t.category, t.date
-    """).fetchall()
+          AND t.booked = 1 AND t.date != '0000-00-00' AND t.date <= ?
+          AND ((t.amount < 0 AND {KIND} IN ('consumption', 'savings'))
+               OR (t.amount > 0 AND {KIND} = 'income'))
+        ORDER BY t.source, t.account_name, t.merchant_name, t.category, t.date
+    """, (as_of,)).fetchall()
 
     by_item: dict[tuple[str, str], list] = {}
     for r in rows:
-        by_item.setdefault((r["merchant_name"], r["category"]), []).append(r)
+        by_item.setdefault((r["source"], r["account_name"], r["merchant_name"], r["category"]), []).append(r)
 
     result = []
-    for (merchant, category), entries in by_item.items():
+    for (source, account, merchant, category), entries in by_item.items():
         months = sorted({e["date"][:7] for e in entries})
         if len(months) < 2:
             continue
@@ -1112,14 +1208,20 @@ def _recurring_items(conn) -> list[dict]:
         first_date, last_date = entries[0]["date"], entries[-1]["date"]
         med = analytics.median(amounts)
         spread = max(amounts) - min(amounts)
-        auto_type = "fix" if med > 0 and spread / med < 0.05 else "variabel"
+        gaps = [periods.months_between(a, b) - 1 for a, b in zip(months, months[1:])]
+        interval = int(analytics.median(gaps))
+        regular = interval in (1, 2, 3, 6, 12) and all(g == interval for g in gaps)
+        one_per_month = len(entries) == len(months)
+        recent = amounts[-3:]
+        stable = med > 0 and (max(recent) - min(recent)) / med < 0.05
+        auto_type = "fix" if regular and one_per_month and stable else "variabel"
         override = overrides.get((merchant, category))
         rec_type = override if override in ("fix", "variabel") else auto_type
 
         # Monatliche Belastung über die tatsächlich abgedeckte Spanne, damit
         # vierteljährliche Zahlungen nicht wie monatliche aussehen.
         span = periods.months_between(months[0], months[-1])
-        monthly = sum(amounts) / span if span else 0.0
+        monthly = amounts[-1] / interval if rec_type == "fix" and regular else (sum(amounts) / span if span else 0.0)
 
         # Preisänderung nur bei betragsstabilen Abos auswerten – bei
         # schwankenden Beträgen (Tanken, Hotels) ist "der Preis ist gestiegen"
@@ -1133,9 +1235,20 @@ def _recurring_items(conn) -> list[dict]:
         # Typischer Abbuchungstag → nächste erwartete Buchung.
         days = sorted(int(e["date"][8:10]) for e in entries)
         typical_day = int(analytics.median([float(d) for d in days]))
-        next_expected = periods.next_occurrence(last_date, typical_day)
+        next_y, next_m = periods._add_months(int(last_date[:4]), int(last_date[5:7]), max(interval, 1))
+        due = periods._day_in_month(next_y, next_m, typical_day)
+        # Overdue for an entire cadence: retain in the list but stop assuming
+        # the contract is active. Missing imports are surfaced separately.
+        expiry_y, expiry_m = periods._add_months(next_y, next_m, max(interval, 1))
+        active = as_of < periods._day_in_month(expiry_y, expiry_m, typical_day)
+        next_expected = due
+        while next_expected <= as_of:
+            next_y, next_m = periods._add_months(next_y, next_m, max(interval, 1))
+            next_expected = periods._day_in_month(next_y, next_m, typical_day)
 
         result.append({
+            "source": source, "account_name": account,
+            "interval_months": interval if regular else None, "active": active,
             "merchant_name": merchant,
             "category": category,
             "kind": entries[-1]["kind"],
@@ -1176,8 +1289,8 @@ def stats_recurring():
     result.sort(key=lambda x: x["yearly_cost"], reverse=True)
     # Sparpläne laufen zwar regelmäßig, sind aber keine Kosten – deshalb in den
     # Summen getrennt ausgewiesen.
-    costs = [r for r in result if r["kind"] == "consumption"]
-    savings_plans = [r for r in result if r["kind"] == "savings"]
+    costs = [r for r in result if r["kind"] == "consumption" and r["active"]]
+    savings_plans = [r for r in result if r["kind"] == "savings" and r["active"]]
     fixed = [r for r in costs if r["type"] == "fix"]
     return {
         "total_yearly":     round(sum(r["yearly_cost"] for r in costs), 2),
@@ -1314,6 +1427,8 @@ def rename_category(old_name: str, body: dict):
     try:
         conn.execute("UPDATE categories SET name = ? WHERE name = ?", (new_name, old_name))
         conn.execute("UPDATE transactions SET category = ? WHERE category = ?", (new_name, old_name))
+        for table in ("category_rules", "category_budgets", "category_corrections", "contextual_corrections", "merchant_overrides"):
+            conn.execute(f"UPDATE {table} SET category = ? WHERE category = ?", (new_name, old_name))
         conn.commit()
     except sqlite3.IntegrityError:
         raise HTTPException(409, "Name bereits vergeben")
@@ -1328,6 +1443,8 @@ def delete_category(name: str):
         raise HTTPException(400, '"Sonstiges" kann nicht gelöscht werden')
     conn = get_db()
     conn.execute("DELETE FROM categories WHERE name = ?", (name,))
+    for table in ("category_rules", "category_budgets", "category_corrections", "contextual_corrections", "merchant_overrides"):
+        conn.execute(f"DELETE FROM {table} WHERE category = ?", (name,))
     conn.execute("UPDATE transactions SET category = 'Sonstiges' WHERE category = ?", (name,))
     conn.commit()
     conn.close()
@@ -1388,13 +1505,13 @@ def budget_status(month: str = Query(None), period: str = Query(None)):
 
     # Budgets sind monatlich gedacht – über längere Zeiträume entsprechend
     # hochgerechnet, damit Soll und Ist vergleichbar bleiben.
-    factor = max(len(p.months()), 1)
+    factor = periods.month_weight(p)
 
     budgets = {r["category"]: r["monthly_budget"] for r in
                conn.execute("SELECT category, monthly_budget FROM category_budgets").fetchall()}
 
-    where, params = _where(p, f"{KIND} = 'consumption'", "t.amount < 0")
-    spending = {r["category"]: abs(r["total"]) for r in conn.execute(f"""
+    where, params = _where(p, f"{KIND} = 'consumption'")
+    spending = {r["category"]: -r["total"] for r in conn.execute(f"""
         SELECT t.category AS category, SUM(t.amount) AS total
         FROM {TX} {where}
         GROUP BY t.category
@@ -1402,7 +1519,8 @@ def budget_status(month: str = Query(None), period: str = Query(None)):
 
     # Nur gesetzt, wenn `p` gerade läuft – Hochrechnung für abgeschlossene
     # Monate wäre gegenstandslos, die Ist-Werte sind dort schon final.
-    fraction = periods.elapsed_fraction(p)
+    quality = _data_quality(conn)
+    fraction = periods.elapsed_fraction(p) if quality["forecast_ready"] else None
     fixed_ctx = _fixed_forecast_context(conn, p, fraction)
     conn.close()
 
@@ -1415,7 +1533,7 @@ def budget_status(month: str = Query(None), period: str = Query(None)):
         actual_fixed = fixed_ctx["actual_by_category"].get(cat, 0.0) if fixed_ctx else 0.0
         projected_fixed = fixed_ctx["projected_by_category"].get(cat, 0.0) if fixed_ctx else 0.0
         variable = spent - actual_fixed
-        return round(projected_fixed + variable / fraction, 2)
+        return round(projected_fixed + max(variable, 0) / fraction + min(variable, 0), 2)
 
     result = []
     seen = set()
@@ -1429,6 +1547,8 @@ def budget_status(month: str = Query(None), period: str = Query(None)):
             "monthly_budget": budget,
             "spent": round(spent, 2),
             "pct": round(spent / scaled * 100, 1) if scaled > 0 else 0,
+            "remaining": round(scaled - spent, 2),
+            "forecast_remaining": round(scaled - forecast, 2) if forecast is not None else None,
             "forecast": forecast,
             "forecast_pct": round(forecast / scaled * 100, 1) if forecast is not None and scaled > 0 else None,
         })
@@ -1440,7 +1560,7 @@ def budget_status(month: str = Query(None), period: str = Query(None)):
                            "forecast": _forecast_spent(cat, spent), "forecast_pct": None})
 
     return {"month": p.start[:7], "period": _period_info(p),
-            "months": factor, "elapsed_fraction": round(fraction, 3) if fraction else None,
+            "data_quality": quality, "months": factor, "elapsed_fraction": round(fraction, 3) if fraction else None,
             "categories": result}
 
 
@@ -1502,7 +1622,7 @@ def list_months():
     rows = conn.execute("""
         SELECT DISTINCT substr(date, 1, 7) AS month
         FROM transactions
-        WHERE date != '0000-00-00'
+        WHERE date != '0000-00-00' AND booked = 1
         ORDER BY month DESC
     """).fetchall()
     conn.close()

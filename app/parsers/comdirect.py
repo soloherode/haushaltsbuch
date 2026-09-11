@@ -48,9 +48,9 @@ def _is_kartenabrechnung(vorgang: str, buchungstext: str) -> bool:
 def parse_comdirect_csv(content: bytes, account_name: str = "comdirect Girokonto") -> list[dict]:
     """Parse a comdirect CSV export (Girokonto or Kreditkarte) and return transactions."""
     try:
-        text = content.decode("iso-8859-1")
-    except Exception:
-        text = content.decode("utf-8", errors="replace")
+        text = content.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = content.decode("cp1252")
 
     reader = csv.reader(io.StringIO(text), delimiter=";")
     rows = list(reader)
@@ -75,7 +75,7 @@ def parse_comdirect_csv(content: bytes, account_name: str = "comdirect Girokonto
             break
 
     if not header_found:
-        return []
+        raise ValueError("Keine unterstützte CSV-Kopfzeile gefunden")
 
     # Column indices
     if is_kreditkarte:
@@ -115,8 +115,8 @@ def parse_comdirect_csv(content: bytes, account_name: str = "comdirect Girokonto
 
         try:
             amount = _parse_amount(umsatz_str)
-        except ValueError:
-            continue
+        except ValueError as exc:
+            raise ValueError(f"Ungültiger Umsatz in Datenzeile {len(transactions) + 1}") from exc
 
         date = _parse_date(buchungstag) or _parse_date(wertstellung)
         if date is None:

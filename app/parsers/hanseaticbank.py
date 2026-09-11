@@ -1,6 +1,7 @@
 import hashlib
 import io
 import re
+from decimal import Decimal
 from datetime import datetime
 from typing import Optional
 
@@ -17,6 +18,43 @@ _ROW_RE = re.compile(rf"^({_DATE})[ \t]+({_DATE}|-)[ \t]+([A-Za-zÄÖÜäöüß]
 # The line that closes a booking: an optional 4-stellige Kartennummer, then the
 # signed Betrag – alone on its own line, e.g. "8125 -4,50" or "- 169,22".
 _AMOUNT_RE = re.compile(r"^(?:(\d{4})[ \t]+)?(-)?[ \t]?([\d.]+,\d{2})[ \t]*$")
+
+
+class StatementTransactions(list):
+    """List-compatible parse result with independently checked statement totals."""
+    def __init__(self, rows, report):
+        super().__init__(rows)
+        self.report = report
+
+
+def _validate_statement(text, transactions):
+    money = r"(-?[ \t]*[\d.]+,\d{2})"
+    def cents(value):
+        return Decimal(re.sub(r"\s", "", value).replace(".", "").replace(",", "."))
+    opening = re.search(r"Alter Saldo\s+" + money, text)
+    closing = re.search(r"Neuer Saldo\s+" + money, text)
+    if not opening or not closing:
+        raise ValueError("Anfangs- oder Endsaldo fehlt; Vollständigkeit des PDF nicht prüfbar")
+    balance = cents(opening.group(1))
+    # Prüft auch Seitenüberträge: fehlende/überlesene Zeilen fallen früh auf.
+    events = sorted([(m.start(), "booking", i) for i, m in enumerate(_ROW_RE.finditer(text))]
+                    + [(m.start(), "balance", cents(m.group(1))) for m in
+                       re.finditer(r"(?:Übertrag Saldo (?:auf|von) Seite \d+|Neuer Saldo)\s+" + money, text)])
+    checks = 0
+    for _, kind, value in events:
+        if kind == "booking":
+            balance += Decimal(str(transactions[value]["amount"]))
+        else:
+            if balance != value:
+                raise ValueError(f"Saldoabgleich fehlgeschlagen: berechnet {balance:.2f} €, Auszug {value:.2f} €")
+            checks += 1
+    period = re.search(r"Abrechnungszeitraum:\s*(" + _DATE + r")\s*-\s*(" + _DATE + r")", text)
+    return {"balance_verified": True, "balance_checks": checks,
+            "opening_balance": float(cents(opening.group(1))),
+            "closing_balance": float(cents(closing.group(1))),
+            "period_start": _parse_date(period.group(1)) if period else None,
+            "period_end": _parse_date(period.group(2)) if period else None,
+            "transaction_count": len(transactions)}
 
 
 def _parse_date(value: str) -> Optional[str]:
@@ -66,7 +104,11 @@ def parse_hanseaticbank_pdf(content: bytes, account_name: str = "HanseaticBank G
 
         amount = None
         desc_lines = block_lines
-        for j in range(len(block_lines) - 1, -1, -1):
+        # Der erste Betrag schließt die Buchung ab. Spätere Saldozeilen
+        # gehören nicht mehr zum Umsatz, insbesondere auf der letzten Seite.
+        for j in range(len(block_lines)):
+            if re.search(r"saldo|übertrag|gesamtbetrag", block_lines[j], re.I):
+                break
             am = _AMOUNT_RE.match(block_lines[j])
             if am:
                 amount = _to_amount(am.group(2), am.group(3))
@@ -74,25 +116,28 @@ def parse_hanseaticbank_pdf(content: bytes, account_name: str = "HanseaticBank G
                 break
         if amount is None:
             # Kein Betrag im Block gefunden -> keine echte Buchungszeile, überspringen.
-            continue
+            raise ValueError(f"Betrag für Buchung vom {booking_raw} nicht eindeutig lesbar")
 
         date = _parse_date(booking_raw) or "0000-00-00"
         transaction_date = _parse_date(transaction_raw)
         description = re.sub(r"\s+", " ", " ".join(desc_lines)).strip()
 
-        is_settlement = "gutschrift" in label.lower()
+        is_settlement = ("gutschrift" in label.lower() and transaction_raw == "-"
+                         and bool(re.search(r"lastschrift|kartenabrechnung|zahlungseingang|ausgleich",
+                                            description, re.I)))
         if is_settlement:
             # Kartenabrechnung = Zahlungseingang (gleicht die Einzelumsätze aus), keine
             # Ausgabe → "Überweisung", analog zu comdirect (parsers/comdirect.py:
             # _is_kartenabrechnung) und dem bisherigen JSON-Import, damit sie nicht doppelt
-            # zu den bereits erfassten Einzeltransaktionen zählt. Der PDF-Druck zeigt den
-            # Betrag mit Minus, tatsächlich verringert er aber den Saldo (siehe
-            # Saldo-Übertrag-Reihen) – daher hier der Absolutbetrag genommen.
+            # zu den bereits erfassten Einzeltransaktionen zählt. Das extrahierte Minus ist
+            # der Platzhalter in der Kartenspalte; der Betrag ist positiv.
             amount = abs(amount)
             category = "Überweisung"
             merchant_name = "Kartenabrechnung"
             city = None
         else:
+            if "gutschrift" in label.lower():
+                amount = abs(amount)
             if "," in description:
                 merchant_name, city = (p.strip() for p in description.split(",", 1))
             else:
@@ -118,4 +163,6 @@ def parse_hanseaticbank_pdf(content: bytes, account_name: str = "HanseaticBank G
             "import_hash":      import_hash,
         })
 
-    return transactions
+    if not transactions:
+        raise ValueError("Keine unterstützten Buchungen im PDF gefunden; Import nicht durchgeführt")
+    return StatementTransactions(transactions, _validate_statement(text, transactions))

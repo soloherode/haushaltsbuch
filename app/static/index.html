@@ -620,7 +620,7 @@ th.sortable.desc::after { content: '↓'; opacity: .8; color: var(--lime); }
     <!-- Sparquote -->
     <div class="sq-hero" id="sq-hero">
       <div class="sq-left">
-        <div class="sq-label">Sparquote</div>
+        <div class="sq-label">Sparüberweisungsquote</div>
         <div class="sq-pct" id="sq-pct">—</div>
         <div class="sq-sub" id="sq-sub">—</div>
       </div>
@@ -761,7 +761,7 @@ th.sortable.desc::after { content: '↓'; opacity: .8; color: var(--lime); }
       <button class="tab" onclick="switchTab('jahr')">Jahresübersicht</button>
       <button class="tab" onclick="switchTab('vgl')">Vergleich</button>
       <button class="tab" onclick="switchTab('abo')">Wiederkehrend</button>
-      <button class="tab" onclick="switchTab('verm')">Vermögensaufbau</button>
+      <button class="tab" onclick="switchTab('verm')">Kumulierte Sparüberweisungen</button>
       <button class="tab" onclick="switchTab('aus')">Ausreißer</button>
     </div>
 
@@ -855,7 +855,7 @@ th.sortable.desc::after { content: '↓'; opacity: .8; color: var(--lime); }
       </div>
     </div>
 
-    <!-- Vermögensaufbau -->
+    <!-- Kumulierte Sparüberweisungen -->
     <div class="tab-pane" id="tab-verm">
       <div class="toolbar"><select id="verm-period"></select></div>
       <div class="kpi-row kpi-row-4">
@@ -1010,6 +1010,20 @@ th.sortable.desc::after { content: '↓'; opacity: .8; color: var(--lime); }
         <div class="fg" style="justify-content:flex-end;padding-top:20px"><button onclick="submitManual()">Hinzufügen</button></div>
       </div>
       <div class="msg" id="msg-man"></div>
+    </div>
+
+    <div class="sh">Importabdeckung & Prognoseprüfung</div>
+    <div class="card">
+      <p style="color:var(--text3);font-size:13px;margin-bottom:16px">Bestätige nur Zeiträume, für die alle Buchungen des gewählten Kontos importiert sind. Geprüfte PDF-Auszüge werden automatisch erfasst.</p>
+      <div class="form-grid">
+        <div class="fg"><label>Konto</label><select id="coverage-account"></select></div>
+        <div class="fg"><label>Von</label><input type="date" id="coverage-start"></div>
+        <div class="fg"><label>Bis einschließlich</label><input type="date" id="coverage-end"></div>
+        <div class="fg"><button onclick="saveCoverage()">Abdeckung bestätigen</button></div>
+      </div>
+      <div id="coverage-list" style="margin-top:12px;font-size:12px"></div>
+      <button class="sec" onclick="checkForecastAccuracy()" style="margin-top:16px">Prognose rückblickend prüfen</button>
+      <div class="msg" id="msg-coverage"></div>
     </div>
 
     <div class="sh">Backup & Restore</div>
@@ -1213,7 +1227,7 @@ function navigate(page) {
   if (page === 'stats')        loadStats();
   if (page === 'budget')       loadBudget();
   if (page === 'rules')        { loadCats(); loadRules(); }
-  if (page === 'import')       loadSuspicious();
+  if (page === 'import')       { loadSuspicious(); loadCoverage(); }
 }
 document.querySelectorAll('nav a, .mobile-menu a').forEach(a => a.addEventListener('click', e => {
   if (!a.dataset.page) return;   // z. B. "Abmelden" im Mobil-Menü
@@ -1328,7 +1342,7 @@ const PERIOD_SELECTS = ['dash-period','stats-period','tx-period','cmp-period',
 
 function fillPeriodSelects() {
   const newest = months[0] || '';
-  // Sinnvolle Startwerte je Ansicht: Vermögensaufbau und Ausreißer über alles,
+  // Sinnvolle Startwerte je Ansicht: Kumulierte Sparüberweisungen und Ausreißer über alles,
   // Jahresübersicht auf dem aktuellen Jahr, der Rest auf dem jüngsten Monat.
   const defaults = {
     'yr-period':   newest.slice(0,4),
@@ -1397,7 +1411,7 @@ async function loadDashboard() {
   document.getElementById('kpi-income-sub').textContent  = perMonth(summary.income);
   document.getElementById('kpi-expense-sub').textContent = fc
     ? `${perMonth(summary.consumption)}${months>1?' · ':''}Prognose ~${fmt(fc.consumption)}`
-    : perMonth(summary.consumption);
+    : (summary.data_quality?.warnings?.[0] || perMonth(summary.consumption));
   document.getElementById('kpi-savings-sub').textContent = perMonth(summary.savings);
   const balEl = document.getElementById('sum-balance');
   balEl.textContent = fmt(summary.balance);
@@ -1419,10 +1433,10 @@ async function loadDashboard() {
   document.getElementById('sq-pct').textContent = sqPct.toFixed(1)+' %';
   document.getElementById('sq-pct').style.color = sqColor;
   document.getElementById('sq-sub').textContent = summary.income>0
-    ? `${fmt(sav)} gespart von ${fmt(summary.income)} Einnahmen`
+    ? `${fmt(sav)} netto in Sparanlagen · Überschussquote ${summary.surplus_rate.toFixed(1)} %`
     : 'Keine Einnahmen im Zeitraum';
   const sqBar = document.getElementById('sq-bar');
-  sqBar.style.width = Math.min(100,sqPct)+'%';
+  sqBar.style.width = Math.max(0,Math.min(100,sqPct))+'%';
   sqBar.style.background = sqColor;
   document.getElementById('sq-mid').textContent = sqPct.toFixed(1)+' %';
 
@@ -1991,7 +2005,7 @@ async function loadComparison() {
     `${data.period.label} gegen ${data.prev_period?data.prev_period.label:'—'}. ` +
     (n>1 ? `Der Zeitraum umfasst ${n} Monate – „Median/Monat" und „gleit. Ø" sind Monatswerte, ` +
            `„vs. Median" vergleicht deshalb den Monatsschnitt des Zeitraums.`
-         : `„Median/Monat" ist der typische Monatswert über die ganze Historie – robuster als ein Mittelwert, ` +
+         : `„Median/Monat" ist der typische Monatswert vor dem gewählten Zeitraum – robuster als ein Mittelwert, ` +
            `weil einzelne Großausgaben ihn nicht verschieben.`);
 
   sortableTable('cmp-body', data.categories, r => {
@@ -2037,13 +2051,13 @@ async function loadRecurring() {
       ${r.type_overridden ? `<button class="linklike" style="margin-left:4px;font-size:11px;color:var(--text3);cursor:pointer;background:none;border:none"
             title="Automatische Erkennung wiederherstellen" onclick="resetRecurringType('${mEsc}','${cEsc}',event)">↺</button>` : ''}`;
     return `<tr>
-      <td>${esc(r.merchant_name)}${r.kind==='savings'?'<span class="chip chip-std" style="margin-left:6px">Sparplan</span>':''}</td>
+      <td>${esc(r.merchant_name)}${r.kind==='savings'?'<span class="chip chip-std" style="margin-left:6px">Sparplan</span>':r.kind==='income'?'<span class="chip chip-std" style="margin-left:6px">Einnahme</span>':''}</td>
       <td style="color:var(--text3)">${esc(r.category)}</td>
       <td>${typeCell}</td>
       <td style="text-align:right;color:var(--red)">${fmt(r.median_amount)}</td>
       <td style="text-align:right">${fmt(r.monthly_cost)}</td>
       <td style="text-align:right;font-weight:600">${fmt(r.yearly_cost)}</td>
-      <td style="color:var(--text3);white-space:nowrap">${r.next_expected}</td>
+      <td style="color:var(--text3);white-space:nowrap">${!r.active ? "Inaktiv / Daten prüfen" : r.interval_months ? r.next_expected + " · alle " + r.interval_months + " Mon." : "Unregelmäßig"}</td>
       <td style="white-space:nowrap">${pcTxt}</td>
     </tr>`;
   }, '<tr><td colspan="8" style="color:var(--text2);text-align:center;padding:20px">Keine wiederkehrenden Buchungen</td></tr>',
@@ -2064,7 +2078,7 @@ async function resetRecurringType(merchant, category, ev) {
   loadRecurring();
 }
 
-// ── Vermögensaufbau ────────────────────────────────────────────────────────────
+// ── Kumulierte Sparüberweisungen ────────────────────────────────────────────────────────────
 async function loadWealth() {
   const data = await api(`/api/stats/wealth?period=${encodeURIComponent(periodOf('verm-period'))}`);
   const pts = data.points;
@@ -2277,7 +2291,7 @@ async function uploadUnified(inp) {
   const fd   = new FormData(); fd.append('file', file);
   try {
     const d = await api(`/api/import/${bank}`, {method:'POST', body:fd});
-    showMsg(msg, 'ok', `✓ ${d.inserted} importiert, ${d.skipped_duplicates} Duplikate`);
+    showMsg(msg, 'ok', `✓ ${d.inserted} importiert, ${d.skipped_duplicates} Duplikate, ${d.reconciled || 0} Vormerkungen abgeglichen. ${d.statement?.balance_verified ? 'Saldo geprüft. ' : ''}${d.unclassified || 0} Kategorien ungeklärt. ${(d.warnings || []).join(' ')}`);
     await refreshMonths();
     if (d.inserted > 0) checkSuggestions();
   } catch(e) { showMsg(msg, 'err', '✗ '+e.message); }
@@ -2295,6 +2309,37 @@ async function restoreBackup(inp) {
   } catch(e){ showMsg(msg,'err','✗ '+e.message); }
   inp.value='';
 }
+let coverageAccounts = [], coveragePeriods = [];
+async function loadCoverage() {
+  const data = await api('/api/import/coverage');
+  coverageAccounts = data.accounts;
+  coveragePeriods = data.periods;
+  document.getElementById('coverage-account').innerHTML = data.accounts.map((a,i)=>`<option value="${i}">${esc(a.account_name)} (${esc(a.source)})</option>`).join('');
+  document.getElementById('coverage-list').innerHTML = data.periods.map((p,i)=>`<div>${esc(p.account_name)}: ${p.start_date} – ${p.end_date} <button class="sec" onclick="removeCoverage(${i})">Entfernen</button></div>`).join('') || 'Noch keine bestätigten Zeiträume.';
+}
+async function saveCoverage() {
+  const account = coverageAccounts[Number(document.getElementById('coverage-account').value)];
+  if (!account) return;
+  try {
+    await api('/api/import/coverage', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source:account.source,account_name:account.account_name,start:document.getElementById('coverage-start').value,end:document.getElementById('coverage-end').value})});
+    showMsg(document.getElementById('msg-coverage'),'ok','Abdeckung gespeichert.');
+    loadCoverage();
+  } catch(e) { showMsg(document.getElementById('msg-coverage'),'err',e.message); }
+}
+async function removeCoverage(index) {
+  const p = coveragePeriods[index];
+  await api('/api/import/coverage',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source:p.source,account_name:p.account_name,start:p.start_date,end:p.end_date,remove:true})});
+  loadCoverage();
+}
+async function checkForecastAccuracy() {
+  try {
+    const r = await api('/api/stats/forecast-validation');
+    showMsg(document.getElementById('msg-coverage'),'ok',r.observations
+      ? `${r.months} vollständige Monate, ${r.observations} Stichtage: mittlere absolute Abweichung ${fmt(r.mae)}; reine Tageshochrechnung ${fmt(r.pace_mae)}. ${r.note}`
+      : 'Noch keine vollständig bestätigten Monate über alle Konten. Bitte Importabdeckung prüfen.');
+  } catch(e) { showMsg(document.getElementById('msg-coverage'),'err',e.message); }
+}
+
 async function loadSuspicious() {
   const data=await api('/api/transactions/suspicious');
   document.getElementById('susp-body').innerHTML=data.length
@@ -2336,6 +2381,7 @@ async function loadBudget() {
   const overColor   = overCount > 0 ? 'red' : 'lime';
 
   document.getElementById('budget-kpis').innerHTML = `
+    <div style="grid-column:1/-1;color:var(--text2);font-size:12px">${esc((data.data_quality?.warnings || []).join(" "))}</div>
     <div class="kpi"><div class="kpi-dot blue"></div><div class="kpi-label">Gesamtbudget</div><div class="kpi-value blue">${fmt(totalBudget)}</div><div class="kpi-sub">${data.period.label}${data.months>1?" ("+data.months+" Monate)":""}</div></div>
     <div class="kpi"><div class="kpi-dot red"></div><div class="kpi-label">Ausgegeben</div><div class="kpi-value red">${fmt(totalSpent)}</div><div class="kpi-sub">${totalBudget>0?((totalSpent/totalBudget)*100).toFixed(0)+' %':'—'}</div></div>
     <div class="kpi"><div class="kpi-dot ${overColor}"></div><div class="kpi-label">Überschritten</div><div class="kpi-value ${overColor}">${overCount}</div><div class="kpi-sub">Kategorie${overCount!==1?'n':''}</div></div>`;
@@ -2352,7 +2398,7 @@ async function loadBudget() {
         ? (c.forecast_pct > 100 ? 'var(--red)' : c.forecast_pct > 80 ? 'var(--orange)' : 'var(--text2)')
         : 'var(--text3)';
       const fLabel = hasExisting
-        ? `Prognose: ~${fmt(c.forecast)} (${c.forecast_pct.toFixed(0)} %)`
+        ? `Prognose: ~${fmt(c.forecast)} · Restbudget ${fmt(c.forecast_remaining)}`
         : `Prognose: ~${fmt(c.forecast)}`;
       forecastHtml = `<div style="font-size:11px;color:${fColor};margin-top:2px">${fLabel}</div>`;
     }

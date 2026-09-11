@@ -10,6 +10,7 @@ COPY app/ ./app/
 VOLUME ["/app/data"]
 
 ENV DB_PATH=/app/data/haushaltsbuch.db
+ENV TZ=Europe/Berlin
 
 EXPOSE 8000
 

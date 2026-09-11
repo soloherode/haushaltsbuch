@@ -122,7 +122,11 @@ def custom_period(start: str, end_inclusive: str) -> Period:
     # Ende inklusive → exklusiv, indem ein Tag addiert wird. Über die
     # ISO-Sortierung ist ein String-Increment nicht möglich, also über date().
     from datetime import date, timedelta
-    e = date.fromisoformat(end_inclusive) + timedelta(days=1)
+    try:
+        date.fromisoformat(start)
+        e = date.fromisoformat(end_inclusive) + timedelta(days=1)
+    except (ValueError, OverflowError) as exc:
+        raise PeriodError("Ungültiges Kalenderdatum") from exc
     return Period(start, e.isoformat(),
                   f"{start} bis {end_inclusive}", "custom")
 
@@ -253,3 +257,15 @@ def previous(period: Period) -> Period | None:
     prev_start = start - timedelta(days=length)
     return Period(prev_start.isoformat(), period.start,
                   f"vorherige {length} Tage", period.kind)
+
+
+def month_weight(period: Period) -> float:
+    """Monatsbudgets für angebrochene Monate tagesgenau gewichten."""
+    from datetime import date
+    total = 0.0
+    for month in period.months():
+        p = month_period(month)
+        lo, hi = max(p.start, period.start), min(p.end, period.end)
+        total += ((date.fromisoformat(hi) - date.fromisoformat(lo)).days /
+                  (date.fromisoformat(p.end) - date.fromisoformat(p.start)).days)
+    return total
