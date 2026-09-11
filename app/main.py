@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
 from app import analytics, auth, periods
-from app.database import init_db, get_db, DB_PATH, VALID_KINDS
+from app.database import init_db, get_db, DB_PATH, VALID_KINDS, VALID_NECESSITY
 from app.categories import CATEGORIES
 from app.parsers.comdirect import parse_comdirect_csv
 from app.parsers.hanseaticbank import parse_hanseaticbank_pdf
@@ -550,6 +550,7 @@ def apply_rules_to_all():
 # (Konsum / Sparen / Umbuchung / Einkommen) überall gleich behandelt wird.
 TX = "transactions t LEFT JOIN categories c ON c.name = t.category"
 KIND = "COALESCE(c.kind, 'consumption')"
+NECESSITY = "COALESCE(c.necessity, 'discretionary')"
 
 
 def _data_quality(conn):
@@ -926,6 +927,40 @@ def stats_categories(
 
     out.sort(key=lambda x: x["total"], reverse=(type == "income"))
     return out
+
+
+@app.get("/api/stats/necessity")
+def stats_necessity(period: str = Query(None)):
+    """Notwendig vs. optional – nur echter Konsum (kind='consumption') zählt."""
+    conn = get_db()
+    p = _resolve_period(conn, period)
+    where, params = _where(p, f"{KIND} = 'consumption'")
+    rows = conn.execute(f"""
+        SELECT t.category AS category, {NECESSITY} AS necessity,
+               SUM(t.amount) AS total, COUNT(*) AS count
+        FROM {TX} {where}
+        GROUP BY t.category, necessity
+    """, params).fetchall()
+    conn.close()
+
+    by_necessity = {"essential": 0.0, "discretionary": 0.0}
+    categories_out = []
+    for r in rows:
+        total = -(r["total"] or 0)  # Ausgaben positiv ausweisen
+        if total <= 0:
+            continue
+        by_necessity[r["necessity"]] = by_necessity.get(r["necessity"], 0) + total
+        categories_out.append({"category": r["category"], "necessity": r["necessity"],
+                                "total": round(total, 2), "count": r["count"]})
+
+    categories_out.sort(key=lambda x: x["total"], reverse=True)
+    total_all = by_necessity["essential"] + by_necessity["discretionary"]
+    return {
+        "essential": round(by_necessity["essential"], 2),
+        "discretionary": round(by_necessity["discretionary"], 2),
+        "discretionary_share": round(by_necessity["discretionary"] / total_all * 100, 1) if total_all else 0.0,
+        "categories": categories_out,
+    }
 
 
 @app.get("/api/stats/monthly")
@@ -1373,10 +1408,11 @@ def list_categories():
 @app.get("/api/categories/detail")
 def list_categories_detail():
     conn = get_db()
-    rows = conn.execute("SELECT name, is_default, kind FROM categories ORDER BY id").fetchall()
+    rows = conn.execute("SELECT name, is_default, kind, necessity FROM categories ORDER BY id").fetchall()
     conn.close()
     return [{"name": r["name"], "is_default": bool(r["is_default"]),
-             "kind": r["kind"] or "consumption"} for r in rows]
+             "kind": r["kind"] or "consumption",
+             "necessity": r["necessity"] or "discretionary"} for r in rows]
 
 
 @app.put("/api/categories/{name}/kind")
@@ -1396,6 +1432,23 @@ def set_category_kind(name: str, body: dict):
     return {"ok": True, "name": name, "kind": kind}
 
 
+@app.put("/api/categories/{name}/necessity")
+def set_category_necessity(name: str, body: dict):
+    """Notwendig vs. optional: essential | discretionary."""
+    necessity = str(body.get("necessity", "")).strip()
+    if necessity not in VALID_NECESSITY:
+        raise HTTPException(400, f"Muss eine von {', '.join(VALID_NECESSITY)} sein")
+    conn = get_db()
+    try:
+        cur = conn.execute("UPDATE categories SET necessity = ? WHERE name = ?", (necessity, name))
+        if cur.rowcount == 0:
+            raise HTTPException(404, f"Unbekannte Kategorie: {name}")
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True, "name": name, "necessity": necessity}
+
+
 @app.post("/api/categories")
 def create_category(body: dict):
     name = str(body.get("name", "")).strip()
@@ -1404,10 +1457,13 @@ def create_category(body: dict):
     kind = str(body.get("kind", "consumption")).strip() or "consumption"
     if kind not in VALID_KINDS:
         raise HTTPException(400, f"Art muss eine von {', '.join(VALID_KINDS)} sein")
+    necessity = str(body.get("necessity", "discretionary")).strip() or "discretionary"
+    if necessity not in VALID_NECESSITY:
+        raise HTTPException(400, f"Muss eine von {', '.join(VALID_NECESSITY)} sein")
     conn = get_db()
     try:
-        conn.execute("INSERT INTO categories (name, is_default, kind) VALUES (?, 0, ?)",
-                     (name, kind))
+        conn.execute("INSERT INTO categories (name, is_default, kind, necessity) VALUES (?, 0, ?, ?)",
+                     (name, kind, necessity))
         conn.commit()
     except sqlite3.IntegrityError:
         raise HTTPException(409, "Kategorie existiert bereits")

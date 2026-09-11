@@ -652,6 +652,19 @@ th.sortable.desc::after { content: '↓'; opacity: .8; color: var(--lime); }
       </div>
     </div>
 
+    <!-- Notwendig vs. Optional -->
+    <div class="budget-card">
+      <div class="kpi-label">Notwendig vs. Optional (Konsum)</div>
+      <div class="budget-top">
+        <div class="budget-value" id="nec-val">—</div>
+        <div style="font-size:12px;color:var(--text2)" id="nec-info"></div>
+      </div>
+      <div class="budget-track">
+        <div class="budget-fill" id="nec-bar-ess" style="width:0%;background:var(--teal)"></div>
+        <div class="budget-fill" id="nec-bar-opt" style="width:0%;background:var(--orange)"></div>
+      </div>
+    </div>
+
     <!-- Sankey -->
     <div class="sankey-card full sankey-mobile-hide">
       <div class="card-label">Cashflow — Wohin fließt dein Geld?</div>
@@ -945,7 +958,7 @@ th.sortable.desc::after { content: '↓'; opacity: .8; color: var(--lime); }
     <div class="card" style="margin-bottom:28px">
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Name</th><th>Typ</th><th style="width:200px">Zählt als</th><th style="width:140px"></th></tr></thead>
+          <thead><tr><th>Name</th><th>Typ</th><th style="width:200px">Zählt als</th><th style="width:160px">Notwendigkeit</th><th style="width:140px"></th></tr></thead>
           <tbody id="cats-body"></tbody>
         </table>
       </div>
@@ -1388,12 +1401,13 @@ async function init() {
 async function loadDashboard() {
   const period = periodOf('dash-period');
   const q = `?period=${encodeURIComponent(period)}`;
-  const [summary, catData, incData, monthly, goalData] = await Promise.all([
+  const [summary, catData, incData, monthly, goalData, necData] = await Promise.all([
     api('/api/stats/summary'+q),
     api('/api/stats/categories'+q),
     api('/api/stats/categories'+q+'&type=income'),
     api('/api/stats/monthly'),
     api('/api/settings/savings-goal'),
+    api('/api/stats/necessity'+q),
   ]);
 
   // Monatsschnitt über die Monate MIT Buchungen – ein angebrochenes Jahr durch
@@ -1487,6 +1501,21 @@ async function loadDashboard() {
   } else {
     barCon.style.width='0%'; barSav.style.width='0%';
     document.getElementById('budget-info').textContent='';
+  }
+
+  // Notwendig vs. Optional
+  const necTotal = necData.essential + necData.discretionary;
+  document.getElementById('nec-val').textContent = necTotal>0 ? `${necData.discretionary_share} % optional` : '—';
+  document.getElementById('nec-info').textContent = necTotal>0
+    ? `${fmt(necData.essential)} notwendig + ${fmt(necData.discretionary)} optional von ${fmt(necTotal)}`
+    : 'Keine Ausgaben im Zeitraum';
+  const necBarEss = document.getElementById('nec-bar-ess');
+  const necBarOpt = document.getElementById('nec-bar-opt');
+  if (necTotal>0) {
+    necBarEss.style.width = (necData.essential/necTotal*100)+'%';
+    necBarOpt.style.width = (necData.discretionary/necTotal*100)+'%';
+  } else {
+    necBarEss.style.width='0%'; necBarOpt.style.width='0%';
   }
 
   renderSankey(summary, catData, incData);
@@ -2156,6 +2185,12 @@ async function loadCats() {
           ${KINDS.map(([v,l])=>`<option value="${v}"${c.kind===v?' selected':''}>${l}</option>`).join('')}
         </select>
       </td>
+      <td>
+        <select class="cat-sel" onchange="setCatNecessity('${esc(c.name).replace(/'/g,"\\'")}',this.value)"
+                title="Notwendige Lebenshaltung oder optionaler Lifestyle-Konsum (nur bei Konsum-Kategorien relevant)">
+          ${NECESSITIES.map(([v,l])=>`<option value="${v}"${c.necessity===v?' selected':''}>${l}</option>`).join('')}
+        </select>
+      </td>
       <td style="white-space:nowrap;text-align:right">
         ${c.name!=='Sonstiges'?`
           <button class="sec" style="padding:4px 10px;font-size:11px" onclick="renameCat('${esc(c.name).replace(/'/g,"\\'")}')">✏️</button>
@@ -2179,6 +2214,23 @@ async function setCatKind(name, kind) {
     await api(`/api/categories/${encodeURIComponent(name)}/kind`,
       {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind})});
     const label = (KINDS.find(k=>k[0]===kind)||[])[1] || kind;
+    showMsg(msg,'ok',`✓ "${name}" zählt jetzt als ${label}`);
+  } catch(e) { showMsg(msg,'err','✗ '+e.message); loadCats(); }
+}
+
+// Notwendig vs. optional – nur für Konsum-Kategorien ausgewertet, siehe
+// /api/stats/necessity und die Dashboard-Kachel "Notwendig vs. Optional".
+const NECESSITIES = [
+  ['essential',     'Notwendig'],
+  ['discretionary', 'Optional'],
+];
+
+async function setCatNecessity(name, necessity) {
+  const msg = document.getElementById('msg-cat');
+  try {
+    await api(`/api/categories/${encodeURIComponent(name)}/necessity`,
+      {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({necessity})});
+    const label = (NECESSITIES.find(k=>k[0]===necessity)||[])[1] || necessity;
     showMsg(msg,'ok',`✓ "${name}" zählt jetzt als ${label}`);
   } catch(e) { showMsg(msg,'err','✗ '+e.message); loadCats(); }
 }

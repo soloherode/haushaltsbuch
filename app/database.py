@@ -32,6 +32,27 @@ CATEGORY_KINDS = {
     "Überweisung":          "transfer",
 }
 
+# Zweite, von `kind` unabhängige Einordnung – nur für kind='consumption'
+# relevant: trennt notwendige Lebenshaltung von optionalem Lifestyle-Konsum.
+# Default für unbekannte/neue Kategorien ist bewusst 'discretionary', damit
+# Ungeprüftes nicht stillschweigend als notwendig durchgeht.
+VALID_NECESSITY = ("essential", "discretionary")
+
+CATEGORY_NECESSITY = {
+    "Lebensmittel":             "essential",
+    "Wohnen & Nebenkosten":     "essential",
+    "Gesundheit":               "essential",
+    "Finanzen & Versicherung":  "essential",
+    "Mobilität":                "essential",
+    "Kinder":                   "essential",
+    "Restaurant & Cafe":        "discretionary",
+    "Einkaufen":                "discretionary",
+    "Kleidung":                 "discretionary",
+    "Hobby":                    "discretionary",
+    "Unterhaltung":             "discretionary",
+    "Sonstiges":                "discretionary",
+}
+
 
 def get_db():
     conn = sqlite3.connect(DB_PATH)
@@ -193,6 +214,8 @@ def init_db():
         "ALTER TABLE categories ADD COLUMN kind TEXT NOT NULL DEFAULT 'consumption'",
         "ALTER TABLE transactions ADD COLUMN category_origin TEXT NOT NULL DEFAULT 'legacy'",
         "ALTER TABLE transactions ADD COLUMN category_locked INTEGER NOT NULL DEFAULT 0",
+        # Notwendig vs. optional – siehe CATEGORY_NECESSITY oben.
+        "ALTER TABLE categories ADD COLUMN necessity TEXT NOT NULL DEFAULT 'discretionary'",
     ]:
         try:
             conn.execute(stmt)
@@ -211,6 +234,14 @@ def init_db():
         for name, kind in CATEGORY_KINDS.items():
             conn.execute("UPDATE categories SET kind = ? WHERE name = ?", (kind, name))
         conn.execute("INSERT INTO settings (key, value) VALUES ('kinds_seeded', '1')")
+        conn.commit()
+
+    # Startbelegung notwendig/optional – ebenfalls nur einmalig, danach frei
+    # vom Nutzer änderbar.
+    if not conn.execute("SELECT value FROM settings WHERE key = 'necessity_seeded'").fetchone():
+        for name, necessity in CATEGORY_NECESSITY.items():
+            conn.execute("UPDATE categories SET necessity = ? WHERE name = ?", (necessity, name))
+        conn.execute("INSERT INTO settings (key, value) VALUES ('necessity_seeded', '1')")
         conn.commit()
 
     # Migrate old user_categories into new categories table
