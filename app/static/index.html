@@ -220,63 +220,49 @@ tr.is-outlier td:first-child { box-shadow: inset 3px 0 0 var(--orange); }
 .kpi-value.blue   { color: var(--blue); }
 .kpi-value.teal   { color: var(--teal); }
 .kpi-sub { font-size: 12px; color: var(--text2); margin-top: 6px; }
-.kpi-dot { position: absolute; top: 14px; right: 14px; width: 28px; height: 28px; border-radius: 50%; opacity: .12; }
-.kpi-dot.lime   { background: var(--lime); }
-.kpi-dot.red    { background: var(--red); }
-.kpi-dot.blue   { background: var(--blue); }
-.kpi-dot.teal   { background: var(--teal); }
-.kpi-dot.orange { background: var(--orange); }
+.kpi-icon {
+  position: absolute; top: 14px; right: 14px; width: 30px; height: 30px;
+  border-radius: 50%; display: flex; align-items: center; justify-content: center;
+}
+.kpi-icon svg { width: 15px; height: 15px; }
+.kpi-icon.lime   { background: rgba(37,99,235,.12); color: var(--lime); }
+.kpi-icon.red    { background: rgba(239,68,68,.12); color: var(--red); }
+.kpi-icon.blue   { background: rgba(37,99,235,.12); color: var(--blue); }
+.kpi-icon.teal   { background: rgba(13,148,136,.12); color: var(--teal); }
+.kpi-icon.orange { background: rgba(249,115,22,.12); color: var(--orange); }
 
-/* ── Sparquote hero (inverted dark section) ── */
+/* ── Sparquote (dezente Karte statt auffaelligem Dark-Hero) ── */
 .sq-hero {
-  background-color: #0F172A;
-  background-image: radial-gradient(circle, rgba(255,255,255,.035) 1px, transparent 1px);
-  background-size: 28px 28px;
-  border: 1px solid #1E293B;
-  border-radius: var(--r2); padding: 32px 36px;
-  display: flex; align-items: center; gap: 48px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--r2); padding: 20px 24px;
+  display: flex; align-items: center; gap: 32px;
   margin-bottom: 16px;
-  position: relative; overflow: hidden;
-  box-shadow: 0 20px 40px rgba(0,0,0,.14);
-}
-.sq-hero::before {
-  content:''; position:absolute; right:-80px; top:-80px;
-  width:280px; height:280px; border-radius:50%;
-  background: radial-gradient(circle, rgba(37,99,235,.16) 0%, transparent 68%);
-  pointer-events: none;
-}
-.sq-hero::after {
-  content:''; position:absolute; left:-50px; bottom:-60px;
-  width:200px; height:200px; border-radius:50%;
-  background: radial-gradient(circle, rgba(59,130,246,.09) 0%, transparent 70%);
-  pointer-events: none;
+  box-shadow: var(--sh-sm);
 }
 .sq-left { flex: 0 0 auto; }
-.sq-pct { font-family: 'JetBrains Mono', monospace; font-size: 56px; font-weight: 700; letter-spacing: -2px; line-height: 1; color: #3B82F6; }
-.sq-label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; color: rgba(255,255,255,.4); margin-bottom: 6px; }
-.sq-sub { font-size: 12px; color: rgba(255,255,255,.45); margin-top: 8px; }
+.sq-pct { font-family: 'JetBrains Mono', monospace; font-size: 26px; font-weight: 700; letter-spacing: -.5px; line-height: 1; color: var(--blue); }
+.sq-label {
+  font-size: 10.5px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: .08em; color: var(--text2); margin-bottom: 6px;
+}
+.sq-sub { font-size: 12px; color: var(--text2); margin-top: 6px; }
 .sq-right { flex: 1; }
-.sq-bar-labels { display: flex; justify-content: space-between; font-size: 11px; color: rgba(255,255,255,.3); margin-bottom: 8px; }
-.sq-track { height: 8px; background: rgba(255,255,255,.08); border-radius: 4px; position: relative; }
-.sq-fill  { height: 100%; border-radius: 4px; transition: width .6s cubic-bezier(.4,0,.2,1); }
+.sq-bar-labels { display: flex; justify-content: space-between; font-size: 11px; color: var(--text3); margin-bottom: 8px; }
+.sq-track { height: 6px; background: var(--sur3); border-radius: 3px; position: relative; }
+.sq-fill  { height: 100%; border-radius: 3px; transition: width .6s cubic-bezier(.4,0,.2,1); }
 .sq-goal-marker {
-  position: absolute; top: -6px; width: 2px; height: 20px;
-  background: rgba(255,255,255,.7); border-radius: 1px;
-  box-shadow: 0 0 8px rgba(255,255,255,.5);
+  position: absolute; top: -4px; width: 2px; height: 14px;
+  background: var(--text2); border-radius: 1px;
   transform: translateX(-50%); transition: left .6s cubic-bezier(.4,0,.2,1);
 }
-.sq-goal-achieved { box-shadow: 0 0 60px rgba(37,99,235,.28) !important; border-color: rgba(37,99,235,.45) !important; }
-#sq-goal-btn {
-  background: rgba(255,255,255,.08) !important; border: 1px solid rgba(255,255,255,.14) !important;
-  color: rgba(255,255,255,.6) !important; box-shadow: none !important;
-}
-#sq-goal-btn:hover { background: rgba(255,255,255,.15) !important; color: #fff !important; }
-#sq-goal-status { font-size: 12px; min-height: 18px; margin-top: 8px; color: rgba(255,255,255,.45); }
+.sq-goal-achieved { box-shadow: 0 0 0 3px rgba(37,99,235,.15) !important; border-color: var(--blue) !important; }
+#sq-goal-status { font-size: 12px; min-height: 18px; margin-top: 8px; color: var(--text2); }
 
 /* ── Budget bar ── */
-.budget-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r2); padding: 22px 26px; margin-bottom: 24px; box-shadow: var(--sh-md); }
+.budget-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px; }
+.budget-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r2); padding: 22px 26px; box-shadow: var(--sh-sm); }
 .budget-top { display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 12px; }
-.budget-value { font-size: 28px; font-weight: 800; letter-spacing: -1px; }
+.budget-value { font-family: 'JetBrains Mono', monospace; font-size: 24px; font-weight: 700; letter-spacing: -.5px; }
 .budget-track { height: 6px; background: var(--sur3); border-radius: 3px; overflow: hidden; display: flex; }
 .budget-fill  { height: 100%; transition: width .6s cubic-bezier(.4,0,.2,1); }
 .budget-track .budget-fill:first-child { border-radius: 3px 0 0 3px; }
@@ -485,7 +471,7 @@ th.sortable.desc::after { content: '↓'; opacity: .8; color: var(--lime); }
   nav { display: none; }
   .mobile-header { display: flex; }
   main { padding: 76px 16px 32px; }
-  .kpi-row, .charts-grid, .import-grid, .form-grid { grid-template-columns: 1fr; }
+  .kpi-row, .charts-grid, .import-grid, .form-grid, .budget-row { grid-template-columns: 1fr; }
   .sq-hero { flex-direction: column; gap: 24px; }
   .sankey-mobile-hide { display: none; }
   .sankey-mobile-table { display: block; }
@@ -589,25 +575,25 @@ th.sortable.desc::after { content: '↓'; opacity: .8; color: var(--lime); }
     <!-- KPIs -->
     <div class="kpi-row kpi-row-4">
       <div class="kpi">
-        <div class="kpi-dot lime"></div>
+        <div class="kpi-icon lime"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 14 15 20 7"/><polyline points="14 7 20 7 20 13"/></svg></div>
         <div class="kpi-label">Einnahmen</div>
         <div class="kpi-value lime" id="sum-income">—</div>
         <div class="kpi-sub" id="kpi-income-sub"></div>
       </div>
       <div class="kpi">
-        <div class="kpi-dot red"></div>
+        <div class="kpi-icon red"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8h12l-1 12H7L6 8Z"/><path d="M9 8V6a3 3 0 0 1 6 0v2"/></svg></div>
         <div class="kpi-label">Konsum</div>
         <div class="kpi-value red" id="sum-consumption">—</div>
         <div class="kpi-sub" id="kpi-expense-sub"></div>
       </div>
       <div class="kpi">
-        <div class="kpi-dot teal"></div>
+        <div class="kpi-icon teal"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 8.5a5 5 0 1 0 0 7"/><line x1="5" y1="10" x2="14" y2="10"/><line x1="5" y1="14" x2="12" y2="14"/></svg></div>
         <div class="kpi-label">Sparen</div>
         <div class="kpi-value teal" id="sum-savings">—</div>
         <div class="kpi-sub" id="kpi-savings-sub"></div>
       </div>
       <div class="kpi">
-        <div class="kpi-dot blue"></div>
+        <div class="kpi-icon blue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="3" x2="12" y2="21"/><path d="M5 8 2 15a4 4 0 0 0 6 0L5 8Z"/><path d="M19 8l-3 7a4 4 0 0 0 6 0l-3-7Z"/><line x1="5" y1="8" x2="19" y2="8"/></svg></div>
         <div class="kpi-label">Bilanz</div>
         <div class="kpi-value blue" id="sum-balance">—</div>
         <div class="kpi-sub" id="kpi-balance-sub"></div>
@@ -636,29 +622,30 @@ th.sortable.desc::after { content: '↓'; opacity: .8; color: var(--lime); }
       </div>
     </div>
 
-    <!-- Budget -->
-    <div class="budget-card">
-      <div class="kpi-label">Budget übrig (Einnahmen − Konsum − Sparen)</div>
-      <div class="budget-top">
-        <div class="budget-value" id="budget-val">—</div>
-        <div style="font-size:12px;color:var(--text2)" id="budget-info"></div>
+    <!-- Budget uebrig + Notwendig/Optional nebeneinander -->
+    <div class="budget-row">
+      <div class="budget-card">
+        <div class="kpi-label">Budget übrig (Einnahmen − Konsum − Sparen)</div>
+        <div class="budget-top">
+          <div class="budget-value" id="budget-val">—</div>
+          <div style="font-size:12px;color:var(--text2)" id="budget-info"></div>
+        </div>
+        <div class="budget-track">
+          <div class="budget-fill" id="budget-bar" style="width:0%"></div>
+          <div class="budget-fill" id="budget-bar-sav" style="width:0%"></div>
+        </div>
       </div>
-      <div class="budget-track">
-        <div class="budget-fill" id="budget-bar" style="width:0%"></div>
-        <div class="budget-fill" id="budget-bar-sav" style="width:0%"></div>
-      </div>
-    </div>
 
-    <!-- Notwendig vs. Optional -->
-    <div class="budget-card">
-      <div class="kpi-label">Notwendig vs. Optional (Konsum)</div>
-      <div class="budget-top">
-        <div class="budget-value" id="nec-val">—</div>
-        <div style="font-size:12px;color:var(--text2)" id="nec-info"></div>
-      </div>
-      <div class="budget-track">
-        <div class="budget-fill" id="nec-bar-ess" style="width:0%;background:var(--teal)"></div>
-        <div class="budget-fill" id="nec-bar-opt" style="width:0%;background:var(--orange)"></div>
+      <div class="budget-card">
+        <div class="kpi-label">Notwendig vs. Optional (Konsum)</div>
+        <div class="budget-top">
+          <div class="budget-value" id="nec-val">—</div>
+          <div style="font-size:12px;color:var(--text2)" id="nec-info"></div>
+        </div>
+        <div class="budget-track">
+          <div class="budget-fill" id="nec-bar-ess" style="width:0%;background:var(--teal)"></div>
+          <div class="budget-fill" id="nec-bar-opt" style="width:0%;background:var(--orange)"></div>
+        </div>
       </div>
     </div>
 
@@ -870,13 +857,13 @@ th.sortable.desc::after { content: '↓'; opacity: .8; color: var(--lime); }
     <div class="tab-pane" id="tab-verm">
       <div class="toolbar"><select id="verm-period"></select></div>
       <div class="kpi-row kpi-row-4">
-        <div class="kpi"><div class="kpi-dot teal"></div><div class="kpi-label">Gespart gesamt</div>
+        <div class="kpi"><div class="kpi-icon teal"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 8.5a5 5 0 1 0 0 7"/><line x1="5" y1="10" x2="14" y2="10"/><line x1="5" y1="14" x2="12" y2="14"/></svg></div><div class="kpi-label">Gespart gesamt</div>
           <div class="kpi-value teal" id="w-total">—</div><div class="kpi-sub" id="w-total-sub"></div></div>
-        <div class="kpi"><div class="kpi-dot blue"></div><div class="kpi-label">Ø pro Monat</div>
+        <div class="kpi"><div class="kpi-icon blue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg></div><div class="kpi-label">Ø pro Monat</div>
           <div class="kpi-value blue" id="w-avg">—</div></div>
-        <div class="kpi"><div class="kpi-dot lime"></div><div class="kpi-label">Median-Sparquote</div>
+        <div class="kpi"><div class="kpi-icon lime"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="5" x2="5" y2="19"/><circle cx="6.5" cy="6.5" r="2.5"/><circle cx="17.5" cy="17.5" r="2.5"/></svg></div><div class="kpi-label">Median-Sparquote</div>
           <div class="kpi-value lime" id="w-rate">—</div><div class="kpi-sub" id="w-rate-sub"></div></div>
-        <div class="kpi"><div class="kpi-dot red"></div><div class="kpi-label">Ziel erreicht</div>
+        <div class="kpi"><div class="kpi-icon red"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/></svg></div><div class="kpi-label">Ziel erreicht</div>
           <div class="kpi-value" id="w-goal">—</div><div class="kpi-sub" id="w-goal-sub"></div></div>
       </div>
       <div class="card full">
@@ -910,13 +897,13 @@ th.sortable.desc::after { content: '↓'; opacity: .8; color: var(--lime); }
     <!-- Wiederkehrend -->
     <div class="tab-pane" id="tab-abo">
       <div class="kpi-row kpi-row-4">
-        <div class="kpi"><div class="kpi-dot red"></div><div class="kpi-label">Fixkosten</div>
+        <div class="kpi"><div class="kpi-icon red"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></div><div class="kpi-label">Fixkosten</div>
           <div class="kpi-value red" id="abo-fix">—</div><div class="kpi-sub" id="abo-fix-sub"></div></div>
-        <div class="kpi"><div class="kpi-dot orange"></div><div class="kpi-label">Variabel wiederkehrend</div>
+        <div class="kpi"><div class="kpi-icon orange"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg></div><div class="kpi-label">Variabel wiederkehrend</div>
           <div class="kpi-value" id="abo-var" style="color:var(--orange)">—</div><div class="kpi-sub">pro Monat</div></div>
-        <div class="kpi"><div class="kpi-dot teal"></div><div class="kpi-label">Sparpläne</div>
+        <div class="kpi"><div class="kpi-icon teal"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 8.5a5 5 0 1 0 0 7"/><line x1="5" y1="10" x2="14" y2="10"/><line x1="5" y1="14" x2="12" y2="14"/></svg></div><div class="kpi-label">Sparpläne</div>
           <div class="kpi-value teal" id="abo-sav">—</div><div class="kpi-sub">pro Monat, keine Kosten</div></div>
-        <div class="kpi"><div class="kpi-dot blue"></div><div class="kpi-label">Preiserhöhungen</div>
+        <div class="kpi"><div class="kpi-icon blue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 14 15 20 7"/><polyline points="14 7 20 7 20 13"/></svg></div><div class="kpi-label">Preiserhöhungen</div>
           <div class="kpi-value blue" id="abo-inc">—</div><div class="kpi-sub">bei festen Abos</div></div>
       </div>
       <div class="card" style="margin-bottom:16px"><p style="color:var(--text3);font-size:13px">Händler mit Buchungen in mindestens zwei Monaten. „Fix“ = Betrag schwankt unter 5 % – lässt sich per Klick auf den Typ übersteuern, z. B. wenn ein Abo trotz Preiserhöhung fix bleiben soll. Fix eingestufte Positionen fließen mit ihrem erwarteten Betrag in die Monatshochrechnung ein.</p></div>
@@ -943,13 +930,13 @@ th.sortable.desc::after { content: '↓'; opacity: .8; color: var(--lime); }
     <div class="tab-pane" id="tab-notw">
       <div class="toolbar"><select id="notw-period"></select></div>
       <div class="kpi-row kpi-row-4">
-        <div class="kpi"><div class="kpi-dot teal"></div><div class="kpi-label">Notwendig gesamt</div>
+        <div class="kpi"><div class="kpi-icon teal"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><polyline points="8.5 12.5 11 15 16 9"/></svg></div><div class="kpi-label">Notwendig gesamt</div>
           <div class="kpi-value teal" id="notw-ess">—</div></div>
-        <div class="kpi"><div class="kpi-dot orange"></div><div class="kpi-label">Optional gesamt</div>
+        <div class="kpi"><div class="kpi-icon orange"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8h12l-1 12H7L6 8Z"/><path d="M9 8V6a3 3 0 0 1 6 0v2"/></svg></div><div class="kpi-label">Optional gesamt</div>
           <div class="kpi-value" id="notw-disc" style="color:var(--orange)">—</div></div>
-        <div class="kpi"><div class="kpi-dot red"></div><div class="kpi-label">Optional-Anteil (Ø Monat)</div>
+        <div class="kpi"><div class="kpi-icon red"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="5" x2="5" y2="19"/><circle cx="6.5" cy="6.5" r="2.5"/><circle cx="17.5" cy="17.5" r="2.5"/></svg></div><div class="kpi-label">Optional-Anteil (Ø Monat)</div>
           <div class="kpi-value red" id="notw-share">—</div></div>
-        <div class="kpi"><div class="kpi-dot blue"></div><div class="kpi-label">Trend Optional-Anteil</div>
+        <div class="kpi"><div class="kpi-icon blue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 12 8 12 10 8 14 16 16 12 21 12"/></svg></div><div class="kpi-label">Trend Optional-Anteil</div>
           <div class="kpi-value blue" id="notw-trend">—</div><div class="kpi-sub">pro Monat</div></div>
       </div>
       <div class="card full">
@@ -2509,9 +2496,9 @@ async function loadBudget() {
 
   document.getElementById('budget-kpis').innerHTML = `
     <div style="grid-column:1/-1;color:var(--text2);font-size:12px">${esc((data.data_quality?.warnings || []).join(" "))}</div>
-    <div class="kpi"><div class="kpi-dot blue"></div><div class="kpi-label">Gesamtbudget</div><div class="kpi-value blue">${fmt(totalBudget)}</div><div class="kpi-sub">${data.period.label}${data.months>1?" ("+data.months+" Monate)":""}</div></div>
-    <div class="kpi"><div class="kpi-dot red"></div><div class="kpi-label">Ausgegeben</div><div class="kpi-value red">${fmt(totalSpent)}</div><div class="kpi-sub">${totalBudget>0?((totalSpent/totalBudget)*100).toFixed(0)+' %':'—'}</div></div>
-    <div class="kpi"><div class="kpi-dot ${overColor}"></div><div class="kpi-label">Überschritten</div><div class="kpi-value ${overColor}">${overCount}</div><div class="kpi-sub">Kategorie${overCount!==1?'n':''}</div></div>`;
+    <div class="kpi"><div class="kpi-icon blue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 8.5a5 5 0 1 0 0 7"/><line x1="5" y1="10" x2="14" y2="10"/><line x1="5" y1="14" x2="12" y2="14"/></svg></div><div class="kpi-label">Gesamtbudget</div><div class="kpi-value blue">${fmt(totalBudget)}</div><div class="kpi-sub">${data.period.label}${data.months>1?" ("+data.months+" Monate)":""}</div></div>
+    <div class="kpi"><div class="kpi-icon red"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 7 10 13 14 9 20 17"/><polyline points="14 17 20 17 20 11"/></svg></div><div class="kpi-label">Ausgegeben</div><div class="kpi-value red">${fmt(totalSpent)}</div><div class="kpi-sub">${totalBudget>0?((totalSpent/totalBudget)*100).toFixed(0)+' %':'—'}</div></div>
+    <div class="kpi"><div class="kpi-icon ${overColor}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 2 20h20L12 3Z"/><line x1="12" y1="10" x2="12" y2="14"/><circle cx="12" cy="17" r="0.6" fill="currentColor" stroke="none"/></svg></div><div class="kpi-label">Überschritten</div><div class="kpi-value ${overColor}">${overCount}</div><div class="kpi-sub">Kategorie${overCount!==1?'n':''}</div></div>`;
 
   const renderItem = (c, hasExisting) => {
     const pct    = hasExisting ? Math.min(c.pct, 100) : 0;
