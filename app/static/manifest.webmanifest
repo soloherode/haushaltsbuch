@@ -1,0 +1,17 @@
+{
+  "name": "Haushaltsbuch",
+  "short_name": "Haushaltsbuch",
+  "description": "Persönliches Haushaltsbuch für Ausgaben, Kategorien und Auswertungen.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#FAFAFA",
+  "theme_color": "#0052FF",
+  "lang": "de",
+  "icons": [
+    { "src": "/static/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/static/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/static/icons/icon-maskable-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "/static/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

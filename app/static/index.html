@@ -2,8 +2,19 @@
 <html lang="de">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Haushaltsbuch</title>
+
+<!-- PWA: Home-Bildschirm-Icon + Standalone-Modus (iOS & Android) -->
+<link rel="manifest" href="/static/manifest.webmanifest">
+<meta name="theme-color" content="#0052FF">
+<link rel="icon" href="/static/icons/favicon-32.png" sizes="32x32">
+<link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Haushaltsbuch">
+
 <link rel="stylesheet" href="/static/fonts/fonts.css">
 <script defer src="/static/vendor/chart.umd.min.js"></script>
 <!-- Nur die d3-Module, die der Sankey braucht (statt des 280-KB-Vollbundles).
@@ -2637,6 +2648,15 @@ function setupDropZones() {
 // Die Vendor-Skripte laufen mit defer, also garantiert vor DOMContentLoaded –
 // erst danach stehen Chart und d3 bereit.
 document.addEventListener('DOMContentLoaded', init);
+
+// PWA: Service Worker fürs App-Shell-Caching (Icon/Installierbarkeit auf dem
+// iPhone braucht ihn zwar nicht zwingend, aber Chrome/Android schon – und er
+// macht den App-Start vom Home-Bildschirm etwas robuster gegen Funklöcher).
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/static/sw.js').catch(() => {});
+  });
+}
 </script>
 </body>
 </html>
