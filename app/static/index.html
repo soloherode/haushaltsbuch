@@ -262,7 +262,8 @@ tr.is-outlier td:first-child { box-shadow: inset 3px 0 0 var(--orange); }
 .budget-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px; }
 .budget-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r2); padding: 22px 26px; box-shadow: var(--sh-sm); }
 .budget-top { display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 12px; }
-.budget-value { font-family: 'JetBrains Mono', monospace; font-size: 24px; font-weight: 700; letter-spacing: -.5px; }
+.budget-value { font-family: 'JetBrains Mono', monospace; font-size: 24px; font-weight: 700; letter-spacing: -.5px; white-space: nowrap; }
+.budget-value-suffix { font-family: 'Inter', -apple-system, sans-serif; font-size: 13px; font-weight: 500; letter-spacing: 0; color: var(--text2); margin-left: 6px; }
 .budget-track { height: 6px; background: var(--sur3); border-radius: 3px; overflow: hidden; display: flex; }
 .budget-fill  { height: 100%; transition: width .6s cubic-bezier(.4,0,.2,1); }
 .budget-track .budget-fill:first-child { border-radius: 3px 0 0 3px; }
@@ -1516,7 +1517,9 @@ async function loadDashboard() {
 
   // Notwendig vs. Optional
   const necTotal = necData.essential + necData.discretionary;
-  document.getElementById('nec-val').textContent = necTotal>0 ? `${necData.discretionary_share} % optional` : '—';
+  document.getElementById('nec-val').innerHTML = necTotal>0
+    ? `${necData.discretionary_share} %<span class="budget-value-suffix">optional</span>`
+    : '—';
   document.getElementById('nec-info').textContent = necTotal>0
     ? `${fmt(necData.essential)} notwendig + ${fmt(necData.discretionary)} optional von ${fmt(necTotal)}`
     : 'Keine Ausgaben im Zeitraum';
