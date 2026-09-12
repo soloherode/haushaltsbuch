@@ -1429,23 +1429,40 @@ function popPeriodSel(sel, monthList, dflt) {
 const PERIOD_SELECTS = ['dash-period','stats-period','tx-period','cmp-period',
                         'budget-period','yr-period','verm-period','aus-period','notw-period'];
 
+// Der Zeitraum gilt app-weit fuer alle Seiten mit Monatsfilter (statt vorher
+// eine eigene, unabhaengige Vorauswahl je Seite) - einmal gewaehlt, bleibt er
+// beim Wechseln zwischen Dashboard/Transaktionen/Statistiken/Budgetziele
+// erhalten und wird in localStorage gemerkt.
+let currentPeriod = localStorage.getItem('period') || null;
+
 function fillPeriodSelects() {
-  const newest = months[0] || '';
-  // Sinnvolle Startwerte je Ansicht: Kumulierte Sparüberweisungen, Ausreißer und
-  // Notwendig/Optional über alles (Monatsverlauf), Jahresübersicht auf dem
-  // aktuellen Jahr, der Rest auf dem jüngsten Monat.
-  const defaults = {
-    'yr-period':   newest.slice(0,4),
-    'verm-period': 'all',
-    'aus-period':  'all',
-    'tx-period':   'all',
-    'notw-period': 'all',
-  };
-  PERIOD_SELECTS.forEach(id =>
-    popPeriodSel(document.getElementById(id), months, defaults[id] ?? newest));
+  const dflt = currentPeriod || months[0] || '';
+  PERIOD_SELECTS.forEach(id => popPeriodSel(document.getElementById(id), months, dflt));
+  if (!currentPeriod) currentPeriod = dflt;
 }
 
 const periodOf = id => document.getElementById(id)?.value || 'all';
+
+// Reload-Funktion je Seite/Tab, die den jeweiligen Select besitzt - wird
+// aufgerufen, wenn der Zeitraum ueber genau diesen Select geaendert wurde
+// (die anderen Seiten laden erst beim naechsten Aufruf/Tab-Wechsel neu, sie
+// bekommen aber sofort den synchronisierten Wert in ihren Select).
+const PERIOD_RELOAD = {
+  'dash-period': loadDashboard, 'stats-period': loadStats, 'tx-period': loadTx,
+  'cmp-period': loadComparison, 'budget-period': loadBudget, 'yr-period': loadYearly,
+  'verm-period': loadWealth, 'aus-period': loadOutliers, 'notw-period': loadNecessityTrend,
+};
+function onPeriodChange(id) {
+  const value = periodOf(id);
+  currentPeriod = value;
+  localStorage.setItem('period', value);
+  PERIOD_SELECTS.forEach(other => {
+    if (other === id) return;
+    const sel = document.getElementById(other);
+    if (sel && [...sel.options].some(o => o.value === value)) sel.value = value;
+  });
+  PERIOD_RELOAD[id]();
+}
 
 async function refreshMonths() {
   months = await api('/api/months');
@@ -1466,8 +1483,7 @@ async function init() {
   });
 
   document.getElementById('m-date').value = new Date().toISOString().slice(0,10);
-  document.getElementById('dash-period').addEventListener('change', loadDashboard);
-  document.getElementById('stats-period').addEventListener('change', loadStats);
+  PERIOD_SELECTS.forEach(id => document.getElementById(id).addEventListener('change', () => onPeriodChange(id)));
   document.getElementById('tl-cat').addEventListener('change', loadTimeline);
   document.getElementById('stats-nooutlier').addEventListener('change', loadStats);
 
