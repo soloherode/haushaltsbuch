@@ -963,6 +963,39 @@ def stats_necessity(period: str = Query(None)):
     }
 
 
+@app.get("/api/stats/necessity-monthly")
+def stats_necessity_monthly(period: str = Query(None), limit: int = Query(24, ge=1, le=120)):
+    """Monatsverlauf notwendig/optional – nur echter Konsum (kind='consumption')."""
+    conn = get_db()
+    p = _resolve_period(conn, period)
+    where, params = _where(p, f"{KIND} = 'consumption'")
+    rows = conn.execute(f"""
+        SELECT substr(t.date, 1, 7) AS month, {NECESSITY} AS necessity,
+               SUM(t.amount) AS total
+        FROM {TX} {where}
+        GROUP BY month, necessity
+        ORDER BY month
+    """, params).fetchall()
+    conn.close()
+
+    by_month: dict[str, dict[str, float]] = {}
+    for r in rows:
+        m = by_month.setdefault(r["month"], {"essential": 0.0, "discretionary": 0.0})
+        total = -(r["total"] or 0)  # Ausgaben positiv ausweisen
+        if r["necessity"] in m:
+            m[r["necessity"]] += total
+
+    months = sorted(by_month)[-limit:]
+    out = []
+    for m in months:
+        ess = round(by_month[m]["essential"], 2)
+        disc = round(by_month[m]["discretionary"], 2)
+        total = ess + disc
+        out.append({"month": m, "essential": ess, "discretionary": disc,
+                     "discretionary_share": round(disc / total * 100, 1) if total else 0.0})
+    return out
+
+
 @app.get("/api/stats/monthly")
 def stats_monthly(period: str = Query(None), limit: int = Query(24, ge=1, le=120)):
     """Monatsverlauf mit getrenntem Konsum und Sparen."""

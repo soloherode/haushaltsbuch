@@ -774,6 +774,7 @@ th.sortable.desc::after { content: '↓'; opacity: .8; color: var(--lime); }
       <button class="tab" onclick="switchTab('jahr')">Jahresübersicht</button>
       <button class="tab" onclick="switchTab('vgl')">Vergleich</button>
       <button class="tab" onclick="switchTab('abo')">Wiederkehrend</button>
+      <button class="tab" onclick="switchTab('notw')">Notwendig/Optional</button>
       <button class="tab" onclick="switchTab('verm')">Kumulierte Sparüberweisungen</button>
       <button class="tab" onclick="switchTab('aus')">Ausreißer</button>
     </div>
@@ -938,6 +939,29 @@ th.sortable.desc::after { content: '↓'; opacity: .8; color: var(--lime); }
             <tbody id="abo-body"></tbody>
           </table>
         </div>
+      </div>
+    </div>
+
+    <!-- Notwendig/Optional -->
+    <div class="tab-pane" id="tab-notw">
+      <div class="toolbar"><select id="notw-period"></select></div>
+      <div class="kpi-row kpi-row-4">
+        <div class="kpi"><div class="kpi-dot teal"></div><div class="kpi-label">Notwendig gesamt</div>
+          <div class="kpi-value teal" id="notw-ess">—</div></div>
+        <div class="kpi"><div class="kpi-dot orange"></div><div class="kpi-label">Optional gesamt</div>
+          <div class="kpi-value" id="notw-disc" style="color:var(--orange)">—</div></div>
+        <div class="kpi"><div class="kpi-dot red"></div><div class="kpi-label">Optional-Anteil (Ø Monat)</div>
+          <div class="kpi-value red" id="notw-share">—</div></div>
+        <div class="kpi"><div class="kpi-dot blue"></div><div class="kpi-label">Trend Optional-Anteil</div>
+          <div class="kpi-value blue" id="notw-trend">—</div><div class="kpi-sub">pro Monat</div></div>
+      </div>
+      <div class="card full">
+        <div class="card-label">Notwendig vs. Optional je Monat</div>
+        <div class="chart-tall"><canvas id="chart-notw"></canvas></div>
+      </div>
+      <div class="card full">
+        <div class="card-label">Optional-Anteil je Monat</div>
+        <div class="chart-tall"><canvas id="chart-notw-share"></canvas></div>
       </div>
     </div>
   </div>
@@ -1266,6 +1290,7 @@ function switchTab(name) {
   if (name === 'abo')  loadRecurring();
   if (name === 'verm') loadWealth();
   if (name === 'aus')  loadOutliers();
+  if (name === 'notw') loadNecessityTrend();
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -1351,17 +1376,19 @@ function popPeriodSel(sel, monthList, dflt) {
 }
 
 const PERIOD_SELECTS = ['dash-period','stats-period','tx-period','cmp-period',
-                        'budget-period','yr-period','verm-period','aus-period'];
+                        'budget-period','yr-period','verm-period','aus-period','notw-period'];
 
 function fillPeriodSelects() {
   const newest = months[0] || '';
-  // Sinnvolle Startwerte je Ansicht: Kumulierte Sparüberweisungen und Ausreißer über alles,
-  // Jahresübersicht auf dem aktuellen Jahr, der Rest auf dem jüngsten Monat.
+  // Sinnvolle Startwerte je Ansicht: Kumulierte Sparüberweisungen, Ausreißer und
+  // Notwendig/Optional über alles (Monatsverlauf), Jahresübersicht auf dem
+  // aktuellen Jahr, der Rest auf dem jüngsten Monat.
   const defaults = {
     'yr-period':   newest.slice(0,4),
     'verm-period': 'all',
     'aus-period':  'all',
     'tx-period':   'all',
+    'notw-period': 'all',
   };
   PERIOD_SELECTS.forEach(id =>
     popPeriodSel(document.getElementById(id), months, defaults[id] ?? newest));
@@ -2145,6 +2172,57 @@ async function loadWealth() {
       data:pts.map(()=>data.goal),borderColor:'#EF4444',borderDash:[5,4],pointRadius:0,borderWidth:2,fill:false});
   new Chart(cv,{type:'bar',data:{labels:pts.map(p=>p.month),datasets:rateSets},
     options:{maintainAspectRatio:false,
+      plugins:{legend:{labels:{color:'#94A3B8',font:{size:11,family:'Inter'},boxWidth:12}}},
+      scales:{x:axes.x,y:{ticks:{color:'#4a5870',font:{size:11},callback:v=>v+' %'},grid:{color:'rgba(226,232,240,.8)'}}}}});
+}
+
+// ── Notwendig/Optional ──────────────────────────────────────────────────────────
+// Einfache lineare Regression (Index 0..n-1 gegen den Wert) für den Trend des
+// Optional-Anteils – analog zum serverseitigen trend_per_month im Vergleich.
+function linTrendPerStep(values) {
+  const n = values.length;
+  if (n < 2) return 0;
+  const xs = values.map((_, i) => i);
+  const meanX = xs.reduce((a,b)=>a+b,0)/n;
+  const meanY = values.reduce((a,b)=>a+b,0)/n;
+  let num = 0, den = 0;
+  for (let i=0;i<n;i++) { num += (xs[i]-meanX)*(values[i]-meanY); den += (xs[i]-meanX)**2; }
+  return den ? num/den : 0;
+}
+
+async function loadNecessityTrend() {
+  const pts = await api(`/api/stats/necessity-monthly?period=${encodeURIComponent(periodOf('notw-period'))}`);
+  const essTotal = pts.reduce((s,p)=>s+p.essential,0);
+  const discTotal = pts.reduce((s,p)=>s+p.discretionary,0);
+  document.getElementById('notw-ess').textContent = fmt(essTotal);
+  document.getElementById('notw-disc').textContent = fmt(discTotal);
+  const avgShare = pts.length ? pts.reduce((s,p)=>s+p.discretionary_share,0)/pts.length : 0;
+  document.getElementById('notw-share').textContent = pts.length ? avgShare.toFixed(1)+' %' : '—';
+  const trend = linTrendPerStep(pts.map(p=>p.discretionary_share));
+  const trendEl = document.getElementById('notw-trend');
+  trendEl.textContent = pts.length>=2 ? `${trend>0?'+':''}${trend.toFixed(1)} pp` : '—';
+  trendEl.className = 'kpi-value ' + (trend>0.05 ? 'red' : trend<-0.05 ? 'lime' : 'blue');
+
+  const axes = {
+    x:{ticks:{color:'#94A3B8',font:{size:11}},grid:{color:'rgba(226,232,240,.8)'}},
+    y:{ticks:{color:'#4a5870',font:{size:11},callback:v=>v.toLocaleString('de-DE')+'€'},grid:{color:'rgba(226,232,240,.8)'}}
+  };
+  let cv = document.getElementById('chart-notw');
+  Chart.getChart(cv)?.destroy();
+  new Chart(cv,{type:'bar',data:{labels:pts.map(p=>p.month),datasets:[
+      {label:'Notwendig',data:pts.map(p=>p.essential),backgroundColor:'rgba(13,148,136,.6)',borderRadius:5,stack:'out'},
+      {label:'Optional',data:pts.map(p=>p.discretionary),backgroundColor:'rgba(249,115,22,.6)',borderRadius:5,stack:'out'},
+    ]},options:{maintainAspectRatio:false,
+      plugins:{legend:{labels:{color:'#94A3B8',font:{size:11,family:'Inter'},boxWidth:12}}},
+      scales:{x:{...axes.x,stacked:true},y:{...axes.y,stacked:true}}}});
+
+  cv = document.getElementById('chart-notw-share');
+  Chart.getChart(cv)?.destroy();
+  new Chart(cv,{type:'line',data:{labels:pts.map(p=>p.month),datasets:[
+      {label:'Optional-Anteil',data:pts.map(p=>p.discretionary_share),borderColor:'#EF4444',
+       backgroundColor:'rgba(239,68,68,.10)',fill:true,tension:0.3,pointRadius:4,
+       pointBackgroundColor:'#EF4444',borderWidth:2},
+    ]},options:{maintainAspectRatio:false,
       plugins:{legend:{labels:{color:'#94A3B8',font:{size:11,family:'Inter'},boxWidth:12}}},
       scales:{x:axes.x,y:{ticks:{color:'#4a5870',font:{size:11},callback:v=>v+' %'},grid:{color:'rgba(226,232,240,.8)'}}}}});
 }
