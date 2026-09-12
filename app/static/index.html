@@ -64,7 +64,8 @@
 body { background: var(--bg); color: var(--text); font-family: 'Inter', -apple-system, sans-serif; font-size: 14px; line-height: 1.5; min-height: 100vh; -webkit-font-smoothing: antialiased; }
 
 /* ── Layout ── */
-.shell { display: grid; grid-template-columns: 260px 1fr; min-height: 100vh; }
+.shell { display: grid; grid-template-columns: 260px 1fr; min-height: 100vh; transition: grid-template-columns .18s; }
+.shell.nav-collapsed { grid-template-columns: 72px 1fr; }
 
 /* ── Nav ── */
 nav {
@@ -89,12 +90,12 @@ nav {
   display: flex; align-items: center; justify-content: center;
   font-size: 15px; flex-shrink: 0;
 }
-.nav-logo span { color: var(--text2); font-weight: 400; font-size: 13px; }
 .nav-section {
   padding: 14px 20px 5px;
   font-size: 10px; font-weight: 600;
   text-transform: uppercase; letter-spacing: .08em;
   color: var(--text3);
+  white-space: nowrap;
 }
 nav a {
   display: flex; align-items: center; gap: 10px;
@@ -102,7 +103,8 @@ nav a {
   color: var(--text2); text-decoration: none;
   border-radius: var(--r);
   font-size: 13.5px; font-weight: 500;
-  transition: all .15s;
+  transition: background-color .15s, color .15s;
+  white-space: nowrap;
 }
 nav a:hover { color: var(--text); background: var(--sur3); }
 nav a.active { color: var(--blue-hov); background: #EFF6FF; font-weight: 600; }
@@ -120,9 +122,17 @@ nav a.active .ni { color: var(--blue-hov); }
   color: var(--text2); border-radius: var(--r);
   padding: 9px 12px; cursor: pointer; font-size: 13.5px; font-weight: 500;
   display: flex; align-items: center; gap: 10px; font-family: inherit;
-  transition: all .15s; box-shadow: none;
+  transition: background-color .15s, color .15s; box-shadow: none;
+  white-space: nowrap;
 }
 .nav-theme:hover { color: var(--text); background: var(--sur3); transform: none; }
+.nav-collapse-btn { margin: 4px 10px 8px; }
+
+/* ── Nav eingeklappt (Icon-only, wie im Portfolio Analyzer) ── */
+.nav-collapsed .nav-logo { padding: 24px 0 20px; justify-content: center; }
+.nav-collapsed .nav-label { display: none; }
+.nav-collapsed .nav-section { display: none; }
+.nav-collapsed nav a, .nav-collapsed .nav-theme { justify-content: center; margin: 1px 8px; padding: 9px; }
 
 /* ── Main ── */
 main { padding: 40px 48px; overflow-y: auto; max-width: 1400px; }
@@ -138,14 +148,14 @@ main { padding: 40px 48px; overflow-y: auto; max-width: 1400px; }
 
 /* ── Toolbar ── */
 .toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 24px; flex-wrap: wrap; }
-select, input[type=text], input[type=date], input[type=number] {
+select, input[type=text], input[type=date], input[type=number], textarea {
   background: var(--surface); border: 1px solid var(--border);
   color: var(--text); border-radius: var(--r);
   padding: 9px 14px; font-size: 13px; outline: none; font-family: inherit;
   transition: border-color .18s, box-shadow .18s;
   box-shadow: var(--sh-sm);
 }
-select:focus, input:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(37,99,235,.15); }
+select:focus, input:focus, textarea:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(37,99,235,.15); }
 option { background: var(--surface); }
 button {
   background: var(--blue); color: #fff;
@@ -300,8 +310,15 @@ tr.is-outlier td:first-child { box-shadow: inset 3px 0 0 var(--orange); }
 .bar-fill  { height: 100%; border-radius: 3px; }
 .bar-val   { width: 90px; text-align: right; font-size: 12.5px; font-weight: 600; flex-shrink: 0; }
 
-/* ── Table ── */
-.table-wrap { overflow-x: auto; }
+/* ── Table ──
+   table-wrap traegt jetzt selbst Rahmen + abgerundete Ecken (wie
+   .table-container im Portfolio Analyzer), statt dass die th-Zellen ihre
+   eigenen, isoliert wirkenden Ecken abrunden - vorher "schwebte" der
+   Tabellenkopf ohne sichtbaren Rahmen mitten in der Card. */
+.table-wrap {
+  overflow-x: auto; overflow-y: hidden;
+  border: 1px solid var(--border); border-radius: var(--r);
+}
 table { width: 100%; border-collapse: collapse; }
 th {
   text-align: left; padding: 10px 14px;
@@ -309,9 +326,8 @@ th {
   letter-spacing: .06em; color: var(--text2);
   border-bottom: 1px solid var(--border);
   background: var(--sur2);
+  white-space: nowrap;
 }
-th:first-child { border-radius: 8px 0 0 0; }
-th:last-child  { border-radius: 0 8px 0 0; }
 td { padding: 12px 14px; border-bottom: 1px solid var(--border); vertical-align: middle; font-size: 13.5px; }
 tr:last-child td { border-bottom: none; }
 tr:hover td { background: rgba(37,99,235,.025); }
@@ -506,42 +522,46 @@ th.sortable.desc::after { content: '↓'; opacity: .8; color: var(--lime); }
     <div class="logo-icon">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
     </div>
-    Haushaltsbuch
+    <span class="nav-label">Haushaltsbuch</span>
   </div>
+  <button class="nav-theme nav-collapse-btn" onclick="toggleNavCollapse()" title="Sidebar ein-/ausklappen">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><line x1="9" y1="4" x2="9" y2="20"/></svg>
+    <span class="nav-label">Einklappen</span>
+  </button>
 
   <div class="nav-section">Übersicht</div>
-  <a href="#" class="active" data-page="dashboard">
-    <span class="ni"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg></span>Dashboard
+  <a href="#" class="active" data-page="dashboard" title="Dashboard">
+    <span class="ni"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg></span><span class="nav-label">Dashboard</span>
   </a>
-  <a href="#" data-page="transactions">
-    <span class="ni"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg></span>Transaktionen
+  <a href="#" data-page="transactions" title="Transaktionen">
+    <span class="ni"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg></span><span class="nav-label">Transaktionen</span>
   </a>
 
   <div class="nav-section">Analyse</div>
-  <a href="#" data-page="stats">
-    <span class="ni"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg></span>Statistiken
+  <a href="#" data-page="stats" title="Statistiken">
+    <span class="ni"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg></span><span class="nav-label">Statistiken</span>
   </a>
-  <a href="#" data-page="budget">
-    <span class="ni"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></span>Budgetziele
+  <a href="#" data-page="budget" title="Budgetziele">
+    <span class="ni"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></span><span class="nav-label">Budgetziele</span>
   </a>
 
   <div class="nav-section">Einstellungen</div>
-  <a href="#" data-page="rules">
-    <span class="ni"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg></span>Regeln & Kategorien
+  <a href="#" data-page="rules" title="Regeln & Kategorien">
+    <span class="ni"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg></span><span class="nav-label">Regeln & Kategorien</span>
   </a>
-  <a href="#" data-page="import">
-    <span class="ni"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></span>Import & Neu
+  <a href="#" data-page="import" title="Import & Neu">
+    <span class="ni"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></span><span class="nav-label">Import & Neu</span>
   </a>
 
   <div class="nav-spacer"></div>
-  <button class="nav-theme" onclick="toggleTheme()"><span id="theme-icon">☀</span><span id="theme-lbl">Hell</span></button>
+  <button class="nav-theme" onclick="toggleTheme()" title="Theme wechseln"><span id="theme-icon">☀</span><span class="nav-label" id="theme-lbl">Hell</span></button>
   <button class="nav-theme" onclick="changePassword()" title="Passwort ändern">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-    Passwort ändern
+    <span class="nav-label">Passwort ändern</span>
   </button>
-  <button class="nav-theme" onclick="logout()" style="margin-bottom:10px">
+  <button class="nav-theme" onclick="logout()" style="margin-bottom:10px" title="Abmelden">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
-    Abmelden
+    <span class="nav-label">Abmelden</span>
   </button>
 </nav>
 
@@ -1165,6 +1185,24 @@ th.sortable.desc::after { content: '↓'; opacity: .8; color: var(--lime); }
   </div>
 </div>
 
+<!-- ── NOTE MODAL ────────────────────────────────────────────────────────────── -->
+<div class="modal-backdrop" id="note-modal" onclick="if(event.target===this)closeNoteModal()">
+  <div class="modal" style="max-width:420px">
+    <div class="modal-header">
+      <h2>Notiz</h2>
+      <button class="modal-close" onclick="closeNoteModal()">✕</button>
+    </div>
+    <div class="fg">
+      <label>Notiz zur Transaktion</label>
+      <textarea id="note-input" rows="4" style="width:100%;resize:vertical" onkeydown="if(event.key==='Enter'&&(event.metaKey||event.ctrlKey))saveNote()"></textarea>
+    </div>
+    <div class="modal-footer">
+      <button class="sec" onclick="closeNoteModal()">Abbrechen</button>
+      <button onclick="saveNote()">Speichern</button>
+    </div>
+  </div>
+</div>
+
 <script>
 // ── State ──────────────────────────────────────────────────────────────────────
 let txPage_ = 1, txPages_ = 1;
@@ -1179,19 +1217,23 @@ const COLORS = [
 ];
 
 // ── Theme ──────────────────────────────────────────────────────────────────────
+// Dark-Palette 1:1 an den Portfolio Analyzer angelehnt (Tailwind Slate 900/800/700):
+// bg=slate-900, surface=slate-800, border=slate-700, text=slate-100,
+// text2=slate-400, text3=slate-500. Vorher war text2 dunkler als text3 (Bug -
+// die "wichtigere" Sekundaerfarbe war schlechter lesbar als die unwichtigere).
 function setTheme(t) {
   const r = document.documentElement.style;
   if (t === 'dark') {
-    r.setProperty('--bg',      '#07090f');
-    r.setProperty('--bg2',     '#0b0e17');
-    r.setProperty('--surface', '#0f1420');
-    r.setProperty('--sur2',    '#141c2e');
-    r.setProperty('--sur3',    '#1a2438');
-    r.setProperty('--border',  '#1e2a3d');
-    r.setProperty('--bord2',   '#253047');
-    r.setProperty('--text',    '#e8eeff');
-    r.setProperty('--text2',   '#4a5870');
-    r.setProperty('--text3',   '#8899b4');
+    r.setProperty('--bg',      '#0F172A');
+    r.setProperty('--bg2',     '#1E293B');
+    r.setProperty('--surface', '#1E293B');
+    r.setProperty('--sur2',    '#243244');
+    r.setProperty('--sur3',    '#334155');
+    r.setProperty('--border',  '#334155');
+    r.setProperty('--bord2',   '#475569');
+    r.setProperty('--text',    '#F1F5F9');
+    r.setProperty('--text2',   '#94A3B8');
+    r.setProperty('--text3',   '#64748B');
   } else {
     r.removeProperty('--bg'); r.removeProperty('--bg2'); r.removeProperty('--surface');
     r.removeProperty('--sur2'); r.removeProperty('--sur3'); r.removeProperty('--border');
@@ -1206,6 +1248,15 @@ function toggleTheme() {
   localStorage.setItem('theme', next); setTheme(next);
 }
 setTheme(localStorage.getItem('theme') || 'light');
+
+// ── Sidebar ein-/ausklappen ──────────────────────────────────────────────────────
+function toggleNavCollapse() {
+  const collapsed = document.querySelector('.shell').classList.toggle('nav-collapsed');
+  localStorage.setItem('navCollapsed', collapsed ? '1' : '0');
+}
+if (localStorage.getItem('navCollapsed') === '1') {
+  document.querySelector('.shell').classList.add('nav-collapsed');
+}
 
 // ── Entry Modal ────────────────────────────────────────────────────────────────
 function openEntryModal() {
@@ -1930,10 +1981,23 @@ function editDate(id,span) {
   inp.addEventListener('blur',save);
   inp.addEventListener('keydown',e=>{ if(e.key==='Enter')inp.blur(); if(e.key==='Escape'){inp.value=cur;inp.blur();} });
 }
+let noteTxId_ = null;
 function editNote(id,btn) {
-  const note=prompt('Notiz:',btn.getAttribute('data-note')||'');
-  if (note===null) return;
-  fetch(`/api/transactions/${id}/note`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({note})}).then(()=>loadTx());
+  noteTxId_ = id;
+  document.getElementById('note-input').value = btn.getAttribute('data-note') || '';
+  document.getElementById('note-modal').classList.add('open');
+  setTimeout(() => document.getElementById('note-input').focus(), 50);
+}
+function closeNoteModal() {
+  document.getElementById('note-modal').classList.remove('open');
+  noteTxId_ = null;
+}
+async function saveNote() {
+  if (noteTxId_ === null) return;
+  const note = document.getElementById('note-input').value;
+  await fetch(`/api/transactions/${noteTxId_}/note`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({note})});
+  closeNoteModal();
+  loadTx();
 }
 async function updateCat(id,cat) {
   await fetch(`/api/transactions/${id}/category`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({category:cat})});
