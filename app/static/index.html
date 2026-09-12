@@ -264,6 +264,15 @@ tr.is-outlier td:first-child { box-shadow: inset 3px 0 0 var(--orange); }
 .budget-top { display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 12px; }
 .budget-value { font-family: 'JetBrains Mono', monospace; font-size: 24px; font-weight: 700; letter-spacing: -.5px; white-space: nowrap; }
 .budget-value-suffix { font-family: 'Inter', -apple-system, sans-serif; font-size: 13px; font-weight: 500; letter-spacing: 0; color: var(--text2); margin-left: 6px; }
+/* ── Notwendig/Optional-Verteilung: beide Betraege direkt sichtbar statt nur Verhaeltnis ── */
+.nec-split { display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 12px; gap: 16px; }
+.nec-split-value { font-family: 'JetBrains Mono', monospace; font-size: 22px; font-weight: 700; letter-spacing: -.5px; line-height: 1; white-space: nowrap; }
+.nec-split-value.teal   { color: var(--teal); }
+.nec-split-value.orange { color: var(--orange); }
+.nec-split-label {
+  font-size: 10.5px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: .06em; color: var(--text2); margin-top: 5px;
+}
 .budget-track { height: 6px; background: var(--sur3); border-radius: 3px; overflow: hidden; display: flex; }
 .budget-fill  { height: 100%; transition: width .6s cubic-bezier(.4,0,.2,1); }
 .budget-track .budget-fill:first-child { border-radius: 3px 0 0 3px; }
@@ -639,9 +648,15 @@ th.sortable.desc::after { content: '↓'; opacity: .8; color: var(--lime); }
 
       <div class="budget-card">
         <div class="kpi-label">Notwendig vs. Optional (Konsum)</div>
-        <div class="budget-top">
-          <div class="budget-value" id="nec-val">—</div>
-          <div style="font-size:12px;color:var(--text2)" id="nec-info"></div>
+        <div class="nec-split">
+          <div class="nec-split-item">
+            <div class="nec-split-value teal" id="nec-ess-val">—</div>
+            <div class="nec-split-label">Notwendig</div>
+          </div>
+          <div class="nec-split-item" style="text-align:right">
+            <div class="nec-split-value orange" id="nec-opt-val">—</div>
+            <div class="nec-split-label" id="nec-opt-label">Optional</div>
+          </div>
         </div>
         <div class="budget-track">
           <div class="budget-fill" id="nec-bar-ess" style="width:0%;background:var(--teal)"></div>
@@ -1515,14 +1530,15 @@ async function loadDashboard() {
     document.getElementById('budget-info').textContent='';
   }
 
-  // Notwendig vs. Optional
+  // Notwendig vs. Optional – beide Betraege direkt zeigen, nicht nur das Verhaeltnis
+  // (Nutzer-Feedback: die reine Prozentzahl half nicht, die Verteilung auf einen
+  // Blick zu erfassen)
   const necTotal = necData.essential + necData.discretionary;
-  document.getElementById('nec-val').innerHTML = necTotal>0
-    ? `${necData.discretionary_share} %<span class="budget-value-suffix">optional</span>`
-    : '—';
-  document.getElementById('nec-info').textContent = necTotal>0
-    ? `${fmt(necData.essential)} notwendig + ${fmt(necData.discretionary)} optional von ${fmt(necTotal)}`
-    : 'Keine Ausgaben im Zeitraum';
+  document.getElementById('nec-ess-val').textContent = necTotal>0 ? fmt(necData.essential) : '—';
+  document.getElementById('nec-opt-val').textContent = necTotal>0 ? fmt(necData.discretionary) : '—';
+  document.getElementById('nec-opt-label').textContent = necTotal>0
+    ? `Optional (${necData.discretionary_share} %)`
+    : 'Optional';
   const necBarEss = document.getElementById('nec-bar-ess');
   const necBarOpt = document.getElementById('nec-bar-opt');
   if (necTotal>0) {
