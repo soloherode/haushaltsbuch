@@ -6,7 +6,7 @@
 <title>Anmelden – Haushaltsbuch</title>
 
 <link rel="manifest" href="/static/manifest.webmanifest">
-<meta name="theme-color" content="#0052FF">
+<meta name="theme-color" content="#2563EB">
 <link rel="icon" href="/static/icons/favicon-32.png" sizes="32x32">
 <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -17,7 +17,7 @@
 <link rel="stylesheet" href="/static/fonts/fonts.css">
 <style>
 :root {
-  --bg:      #FAFAFA;
+  --bg:      #F8FAFC;
   --surface: #FFFFFF;
   --sur2:    #F8FAFC;
   --border:  #E2E8F0;
@@ -25,14 +25,12 @@
   --text:    #0F172A;
   --text2:   #64748B;
   --text3:   #94A3B8;
-  --blue:    #0052FF;
-  --grad:    linear-gradient(135deg, #0052FF, #4D7CFF);
+  --blue:     #2563EB;
+  --blue-hov: #1D4ED8;
   --red:     #EF4444;
-  --r:       12px;
-  --r2:      16px;
-  --sh-lg:     0 10px 24px rgba(0,0,0,.09);
-  --sh-acc:    0 4px 14px rgba(0,82,255,.20);
-  --sh-acc-lg: 0 8px 24px rgba(0,82,255,.30);
+  --r:       8px;
+  --r2:      12px;
+  --sh-lg:     0 4px 16px rgba(0,0,0,.08);
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body {
@@ -50,29 +48,29 @@ body {
 @keyframes fadeInUp { from { opacity:0; transform: translateY(12px); } to { opacity:1; transform:none; } }
 .logo { display: flex; align-items: center; gap: 12px; margin-bottom: 28px; }
 .logo-icon {
-  width: 40px; height: 40px; border-radius: 11px; background: var(--grad);
-  display: flex; align-items: center; justify-content: center; box-shadow: var(--sh-acc);
+  width: 40px; height: 40px; border-radius: var(--r); background: var(--blue);
+  display: flex; align-items: center; justify-content: center;
 }
-.logo-text { font-size: 19px; font-weight: 800; letter-spacing: -.4px; }
-h1 { font-size: 22px; font-weight: 800; letter-spacing: -.4px; margin-bottom: 6px; }
+.logo-text { font-size: 17px; font-weight: 700; letter-spacing: -.3px; }
+h1 { font-size: 20px; font-weight: 700; letter-spacing: -.3px; margin-bottom: 6px; }
 .sub { color: var(--text2); font-size: 13px; margin-bottom: 26px; }
 label { display: block; font-size: 12px; font-weight: 600; color: var(--text2); margin-bottom: 7px; }
 input[type=password] {
   width: 100%; background: var(--sur2); border: 1px solid var(--border);
-  border-radius: 10px; color: var(--text); padding: 11px 14px; font-size: 14px;
+  border-radius: var(--r); color: var(--text); padding: 11px 14px; font-size: 14px;
   font-family: inherit; outline: none; transition: border-color .18s, box-shadow .18s;
 }
-input[type=password]:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(0,82,255,.1); }
+input[type=password]:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(37,99,235,.15); }
 .field { margin-bottom: 16px; }
 .check { display: flex; align-items: center; gap: 8px; margin-bottom: 22px; color: var(--text2); font-size: 13px; cursor: pointer; user-select: none; }
 .check input { accent-color: var(--blue); width: 15px; height: 15px; cursor: pointer; }
 button {
-  width: 100%; background: var(--grad); color: #fff; border: none;
-  border-radius: 10px; padding: 12px; font-size: 14px; font-weight: 600;
-  font-family: inherit; cursor: pointer; box-shadow: var(--sh-acc);
-  transition: transform .18s, box-shadow .18s;
+  width: 100%; background: var(--blue); color: #fff; border: none;
+  border-radius: var(--r); padding: 12px; font-size: 14px; font-weight: 500;
+  font-family: inherit; cursor: pointer; box-shadow: none;
+  transition: background-color .15s;
 }
-button:hover:not(:disabled) { transform: translateY(-1px); box-shadow: var(--sh-acc-lg); }
+button:hover:not(:disabled) { background: var(--blue-hov); }
 button:disabled { opacity: .6; cursor: default; }
 .msg {
   display: none; margin-top: 16px; padding: 11px 14px; border-radius: 10px;
