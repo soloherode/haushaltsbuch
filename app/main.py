@@ -1282,6 +1282,14 @@ def _recurring_items(conn, as_of: str | None = None) -> list[dict]:
         one_per_month = len(entries) == len(months)
         recent = amounts[-3:]
         stable = med > 0 and (max(recent) - min(recent)) / med < 0.05
+        # Ein einzelner Preissprung macht ein zuvor stabiles Abo nicht zu
+        # einer variablen Ausgabe und soll als Erhöhung sichtbar bleiben.
+        previous = amounts[-4:-1]
+        if len(previous) == 3:
+            previous_med = analytics.median(previous)
+            stable = stable or (previous_med > 0
+                                and (max(previous) - min(previous)) / previous_med < 0.05
+                                and (amounts[-1] - previous_med) / previous_med > 0.10)
         auto_type = "fix" if regular and one_per_month and stable else "variabel"
         override = overrides.get((merchant, category))
         rec_type = override if override in ("fix", "variabel") else auto_type
@@ -1310,7 +1318,7 @@ def _recurring_items(conn, as_of: str | None = None) -> list[dict]:
         expiry_y, expiry_m = periods._add_months(next_y, next_m, max(interval, 1))
         active = as_of < periods._day_in_month(expiry_y, expiry_m, typical_day)
         next_expected = due
-        while next_expected <= as_of:
+        while next_expected < as_of:
             next_y, next_m = periods._add_months(next_y, next_m, max(interval, 1))
             next_expected = periods._day_in_month(next_y, next_m, typical_day)
 
@@ -1345,6 +1353,45 @@ def _recurring_items(conn, as_of: str | None = None) -> list[dict]:
             } if changed else None,
         })
     return result
+
+
+def _upcoming_payments(items: list[dict], today: date, days: int) -> list[dict]:
+    """Expand active, regular payments into estimated upcoming occurrences."""
+    end = today + timedelta(days=days)
+    upcoming = []
+    for item in items:
+        if not item["active"] or item["type"] != "fix" or not item["interval_months"]:
+            continue
+        due = date.fromisoformat(item["next_expected"])
+        while due <= end:
+            if due >= today:
+                upcoming.append({
+                    "expected": due.isoformat(),
+                    "days_until": (due - today).days,
+                    "merchant_name": item["merchant_name"],
+                    "category": item["category"],
+                    "account_name": item["account_name"],
+                    "kind": item["kind"],
+                    "amount": item["last_amount"],
+                    "price_increase": item["price_change"] if item["price_changed"]
+                    and item["price_change"]["diff"] > 0 else None,
+                })
+            year, month = periods._add_months(due.year, due.month, item["interval_months"])
+            due = date.fromisoformat(periods._day_in_month(year, month, item["typical_day"]))
+    return sorted(upcoming, key=lambda row: (row["expected"], row["merchant_name"], row["account_name"]))
+
+
+@app.get("/api/stats/upcoming")
+def stats_upcoming(days: int = Query(45, ge=1, le=90)):
+    today = date.today()
+    conn = get_db()
+    try:
+        items = _upcoming_payments(_recurring_items(conn, as_of=today.isoformat()), today, days)
+        quality = _data_quality(conn)
+    finally:
+        conn.close()
+    return {"as_of": today.isoformat(), "days": days, "items": items,
+            "data_quality": quality}
 
 
 @app.get("/api/stats/recurring")

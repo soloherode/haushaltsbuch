@@ -78,6 +78,34 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(item['next_expected'],'2026-07-01')
         self.assertFalse(api._recurring_items(self.conn,as_of='2026-11-01')[0]['active'])
 
+    def test_upcoming_includes_today_and_repeats_within_window(self):
+        for day in ['2026-07-25', '2026-08-25']:
+            self.tx(day, -20, 'Unterhaltung', 'Streaming')
+        items = api._recurring_items(self.conn, as_of='2026-09-25')
+        self.assertEqual(items[0]['next_expected'], '2026-09-25')
+        upcoming = api._upcoming_payments(items, date(2026, 9, 25), 45)
+        self.assertEqual([r['expected'] for r in upcoming], ['2026-09-25', '2026-10-25'])
+        self.assertEqual([r['days_until'] for r in upcoming], [0, 30])
+
+    def test_upcoming_omits_inactive_and_variable_items(self):
+        for day in ['2026-01-01', '2026-02-01']:
+            self.tx(day, -15, 'Unterhaltung', 'Old subscription')
+        for day, amount in [('2026-07-10', -10), ('2026-08-10', -25)]:
+            self.tx(day, amount, 'Unterhaltung', 'Variable subscription')
+        items = api._recurring_items(self.conn, as_of='2026-09-01')
+        self.assertEqual(api._upcoming_payments(items, date(2026, 9, 1), 45), [])
+
+    def test_price_increase_keeps_stable_subscription_in_upcoming(self):
+        for day, amount in [('2026-05-10', -10), ('2026-06-10', -10),
+                            ('2026-07-10', -10), ('2026-08-10', -12)]:
+            self.tx(day, amount, 'Unterhaltung', 'Streaming')
+        items = api._recurring_items(self.conn, as_of='2026-09-01')
+        self.assertEqual(items[0]['type'], 'fix')
+        upcoming = api._upcoming_payments(items, date(2026, 9, 1), 30)
+        self.assertEqual(upcoming[0]['expected'], '2026-09-10')
+        self.assertEqual(upcoming[0]['amount'], 12)
+        self.assertEqual(upcoming[0]['price_increase']['diff'], 2)
+
     def test_accounts_not_merged(self):
         for account,amount in [('one',-100),('two',-200)]:
             for day in ['2026-07-01','2026-08-01']:

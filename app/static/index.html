@@ -190,6 +190,17 @@ button.danger:hover { background: rgba(239,68,68,.15); }
   font-size: 10.5px; font-weight: 600; text-transform: uppercase;
   letter-spacing: .08em; color: var(--text2); margin-bottom: 8px;
 }
+.upcoming-head { display:flex; justify-content:space-between; align-items:baseline; gap:12px; flex-wrap:wrap; }
+.upcoming-note { color:var(--text2); font-size:12px; margin:4px 0 10px; }
+.upcoming-list { display:grid; gap:0; }
+.upcoming-item { display:grid; grid-template-columns:74px minmax(0,1fr) auto; gap:12px; align-items:center; padding:11px 0; border-top:1px solid var(--border); }
+.upcoming-date { font-weight:700; font-size:12px; color:var(--text2); white-space:nowrap; }
+.upcoming-soon { color:var(--orange); font-size:10px; font-weight:700; }
+.upcoming-name { font-weight:600; overflow-wrap:anywhere; }
+.upcoming-meta { font-size:11px; color:var(--text2); }
+.upcoming-amount { font-family:'JetBrains Mono',monospace; font-size:13px; font-weight:700; white-space:nowrap; text-align:right; }
+.upcoming-alert { color:var(--orange); font-size:11px; font-weight:600; }
+.upcoming-empty { color:var(--text2); font-size:13px; padding:12px 0; }
 
 /* ── KPI row ── */
 .kpi-row { display: grid; grid-template-columns: repeat(3,1fr); gap: 16px; margin-bottom: 16px; }
@@ -498,6 +509,8 @@ th.sortable.desc::after { content: '↓'; opacity: .8; color: var(--lime); }
   .mobile-header { display: flex; }
   main { padding: 76px 16px 32px; }
   .kpi-row, .charts-grid, .import-grid, .form-grid, .budget-row { grid-template-columns: 1fr; }
+  .upcoming-item { grid-template-columns:60px minmax(0,1fr); }
+  .upcoming-amount { grid-column:2; text-align:left; }
   .sq-hero { flex-direction: column; gap: 24px; }
   .sankey-mobile-hide { display: none; }
   .sankey-mobile-table { display: block; }
@@ -683,6 +696,15 @@ th.sortable.desc::after { content: '↓'; opacity: .8; color: var(--lime); }
           <div class="budget-fill" id="nec-bar-opt" style="width:0%;background:var(--orange)"></div>
         </div>
       </div>
+    </div>
+
+    <div class="card full">
+      <div class="upcoming-head">
+        <div class="card-label">Anstehende Zahlungen · nächste 30 Tage</div>
+        <button class="sec" onclick="navigate('stats');switchTab('abo')" style="padding:5px 10px;font-size:11px">Alle Termine</button>
+      </div>
+      <div class="upcoming-note">Geschätzte Termine und Beträge aus wiederkehrenden Buchungen.</div>
+      <div id="dashboard-upcoming" class="upcoming-list"></div>
     </div>
 
     <!-- Sankey -->
@@ -932,6 +954,11 @@ th.sortable.desc::after { content: '↓'; opacity: .8; color: var(--lime); }
 
     <!-- Wiederkehrend -->
     <div class="tab-pane" id="tab-abo">
+      <div class="card full">
+        <div class="card-label">Anstehende feste Buchungen · nächste 45 Tage</div>
+        <div class="upcoming-note">Geschätzte Termine und Beträge aus bisherigen Buchungen. Neue oder unregelmäßige Zahlungen können fehlen.</div>
+        <div id="recurring-upcoming" class="upcoming-list"></div>
+      </div>
       <div class="kpi-row kpi-row-4">
         <div class="kpi"><div class="kpi-icon red"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></div><div class="kpi-label">Fixkosten</div>
           <div class="kpi-value red" id="abo-fix">—</div><div class="kpi-sub" id="abo-fix-sub"></div></div>
@@ -1495,14 +1522,16 @@ async function init() {
 async function loadDashboard() {
   const period = periodOf('dash-period');
   const q = `?period=${encodeURIComponent(period)}`;
-  const [summary, catData, incData, monthly, goalData, necData] = await Promise.all([
+  const [summary, catData, incData, monthly, goalData, necData, upcoming] = await Promise.all([
     api('/api/stats/summary'+q),
     api('/api/stats/categories'+q),
     api('/api/stats/categories'+q+'&type=income'),
     api('/api/stats/monthly'),
     api('/api/settings/savings-goal'),
     api('/api/stats/necessity'+q),
+    api('/api/stats/upcoming?days=45'),
   ]);
+  renderUpcoming('dashboard-upcoming', upcoming, 30, 5, false);
 
   // Monatsschnitt über die Monate MIT Buchungen – ein angebrochenes Jahr durch
   // zwölf zu teilen würde die Zahlen künstlich drücken.
@@ -2166,8 +2195,34 @@ async function loadComparison() {
      'current');
 }
 
+function renderUpcoming(id, data, days, limit, includeIncome) {
+  const target = document.getElementById(id);
+  const items = data.items.filter(r => r.days_until <= days && (includeIncome || r.kind !== 'income')).slice(0, limit);
+  const note = target.previousElementSibling;
+  if (!note.dataset.baseNote) note.dataset.baseNote = note.textContent;
+  note.textContent = note.dataset.baseNote + (!data.data_quality.forecast_ready
+    ? ' Datenlage prüfen: Die Vorhersage beruht möglicherweise auf unvollständigen Buchungen.' : '');
+  target.innerHTML = items.length ? items.map(r => {
+    const when = `${r.expected.slice(8,10)}.${r.expected.slice(5,7)}.`;
+    const soon = r.days_until === 0 ? 'Heute' : r.days_until === 1 ? 'Morgen'
+      : r.days_until <= 7 ? `in ${r.days_until} Tagen` : '';
+    const type = r.kind === 'income' ? 'Einnahme' : r.kind === 'savings' ? 'Sparplan' : 'Ausgabe';
+    const change = r.price_increase
+      ? `<div class="upcoming-alert">Preis gestiegen: +${fmt(r.price_increase.diff)} (${r.price_increase.pct.toFixed(0)} %)</div>` : '';
+    return `<div class="upcoming-item">
+      <div class="upcoming-date">${when}${soon ? `<div class="upcoming-soon">${soon}</div>` : ''}</div>
+      <div><div class="upcoming-name">${esc(r.merchant_name)}</div>
+        <div class="upcoming-meta">${esc(r.category)} · ${esc(r.account_name)} · ${type}</div>${change}</div>
+      <div class="upcoming-amount" style="color:${r.kind==='income'?'var(--teal)':'var(--text)'}">${r.kind==='income'?'+':'−'} ca. ${fmt(r.amount)}</div>
+    </div>`;
+  }).join('') : '<div class="upcoming-empty">Keine erkannten festen Buchungen in diesem Zeitraum.</div>';
+}
+
 async function loadRecurring() {
-  const data = await api('/api/stats/recurring');
+  const [data, upcoming] = await Promise.all([
+    api('/api/stats/recurring'), api('/api/stats/upcoming?days=45')
+  ]);
+  renderUpcoming('recurring-upcoming', upcoming, 45, Infinity, true);
   document.getElementById('abo-fix').textContent = fmt(data.fixed_monthly);
   document.getElementById('abo-fix-sub').textContent =
     `${data.fixed_count} feste Abos · ${fmt(data.fixed_yearly)} pro Jahr`;
