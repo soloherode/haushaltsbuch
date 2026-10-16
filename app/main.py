@@ -916,6 +916,18 @@ def stats_outliers(period: str = Query(None), month: str = Query(None)):
 
 # ─── Übersicht ─────────────────────────────────────────────────────────────────
 
+@app.get("/api/stats/explorer")
+def stats_explorer(period: str = Query(None), exclude_outliers: bool = Query(False),
+                   category: str = Query(None), include_bookings: bool = Query(False)):
+    from app.statistics_explorer import build
+    conn = get_db()
+    try:
+        return build(conn, _resolve_period(conn, period),
+                     exclude_outliers=exclude_outliers, category=category, include_bookings=include_bookings)
+    finally:
+        conn.close()
+
+
 @app.get("/api/stats/summary")
 def stats_summary(period: str = Query(None), month: str = Query(None)):
     conn = get_db()

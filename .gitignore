@@ -5,3 +5,6 @@ __pycache__/
 *.db-wal
 *.db-shm
 *.tar.gz
+
+# Local UI captures can contain private financial data.
+/docs/statistik-konzept/**/*.jpg
