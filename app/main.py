@@ -5,6 +5,7 @@ import os
 import re
 import sqlite3
 import math
+from decimal import Decimal, InvalidOperation
 from datetime import date, timedelta
 from contextlib import asynccontextmanager
 
@@ -16,7 +17,7 @@ from starlette.concurrency import run_in_threadpool
 
 from app import analytics, auth, periods
 from app.database import init_db, get_db, DB_PATH, VALID_KINDS, VALID_NECESSITY
-from app.categories import CATEGORIES
+from app.categories import CATEGORIES, normalize_category_text
 from app.parsers.comdirect import parse_comdirect_csv
 from app.parsers.hanseaticbank import parse_hanseaticbank_pdf
 
@@ -182,56 +183,105 @@ def root():
 
 # ─── Helpers ───────────────────────────────────────────────────────────────────
 
+def _ordered_category_rules(conn):
+    # Payment providers describe how a purchase was paid, not what it was.
+    # Preserve explicit priorities, then prefer merchant/purpose rules.
+    return conn.execute("""SELECT pattern, category FROM category_rules
+        ORDER BY priority DESC,
+        CASE WHEN lower(trim(pattern)) IN ('paypal', 'klarna', 'riverty', 'visa', 'mastercard')
+             THEN 1 ELSE 0 END,
+        LENGTH(pattern) DESC, id""").fetchall()
+
+
 def _apply_db_rules(description: str, merchant: str, conn) -> str | None:
     """Check user-defined rules in DB; return category or None."""
-    text = (description + " " + merchant).lower()
-    rows = conn.execute(
-        "SELECT pattern, category FROM category_rules ORDER BY priority DESC, id"
-    ).fetchall()
+    text = normalize_category_text(description + " " + merchant)
+    rows = _ordered_category_rules(conn)
     for row in rows:
-        if row["pattern"] in text:
+        if normalize_category_text(row["pattern"]) in text:
             return row["category"]
     return None
 
 
+def _learned_category(t, conn) -> str | None:
+    """Reuse unambiguous corrections within one account, context and direction."""
+    merchant, description = t["merchant_name"] or "", t["description"] or ""
+    if not merchant and not description.strip():
+        return None
+    key = (t["source"], t["account_name"], 1 if t["amount"] > 0 else -1)
+    examples = conn.execute("""SELECT merchant_name, description, category FROM contextual_corrections
+        WHERE source = ? AND account_name = ? AND direction = ?""", key).fetchall()
+    split_contexts = {(normalize_category_text(r["merchant_name"]), normalize_category_text(r["description"]))
+                     for r in conn.execute("""SELECT merchant_name, description FROM transactions
+                         WHERE source = ? AND account_name = ?
+                         AND CASE WHEN amount > 0 THEN 1 ELSE -1 END = ?
+                         AND EXISTS (SELECT 1 FROM transaction_splits WHERE transaction_id = transactions.id)""", key)}
+    # A prior whole-transaction correction becomes obsolete if the user
+    # subsequently splits that basket. Do not teach its old single category.
+    examples = [r for r in examples if (normalize_category_text(r["merchant_name"]),
+                                       normalize_category_text(r["description"])) not in split_contexts]
+    # Older batch corrections and corrections without a merchant name were
+    # not learned. Read those explicit choices without rewriting past data.
+    examples += conn.execute("""SELECT merchant_name, description, category FROM transactions
+        WHERE source = ? AND account_name = ? AND CASE WHEN amount > 0 THEN 1 ELSE -1 END = ?
+        AND category_origin = 'manual' AND NOT EXISTS (
+            SELECT 1 FROM transaction_splits WHERE transaction_id = transactions.id)""", key).fetchall()
+    categories = {r["category"] for r in examples
+                  if normalize_category_text(r["merchant_name"]) == normalize_category_text(merchant)
+                  and normalize_category_text(r["description"]) == normalize_category_text(description)}
+    return next(iter(categories)) if len(categories) == 1 else None
+
+
+def _remember_category(conn, tx, category: str):
+    merchant, description = tx["merchant_name"] or "", tx["description"] or ""
+    if not merchant and not description.strip():
+        return
+    conn.execute("""INSERT INTO contextual_corrections VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(source, account_name, merchant_name, description, direction)
+        DO UPDATE SET category = excluded.category""",
+        (tx["source"], tx["account_name"], merchant, description,
+         1 if tx["amount"] > 0 else -1, category))
+    if merchant and (tx["category"] != category or tx["category_origin"] != "manual"):
+        conn.execute("""INSERT INTO category_corrections (merchant_name, category, count) VALUES (?, ?, 1)
+            ON CONFLICT(merchant_name, category) DO UPDATE SET count = count + 1""", (merchant, category))
+
+
 def _insert_transactions(transactions: list[dict]) -> dict:
     conn = get_db()
-    inserted = skipped = reconciled = 0
+    inserted = skipped = reconciled = unclassified = 0
     warnings = []
+    new_rows = []
     try:
         for original in transactions:
             t = dict(original)
             t["category_origin"] = "parser"
-            # Rules are explicit. Merchant-only historical corrections remain
-            # suggestions: the same recipient may be rent, saving or groceries.
-            rule_cat = _apply_db_rules(t.get("description", ""), t.get("merchant_name", ""), conn)
-            if rule_cat and t["category"] != "Überweisung":
-                t.update(category=rule_cat, category_origin="rule")
-            elif t["category"] != "Überweisung":
-                learned = conn.execute("""SELECT category FROM contextual_corrections
-                    WHERE source = ? AND account_name = ? AND merchant_name = ?
-                    AND description = ? AND direction = ?""",
-                    (t["source"], t["account_name"], t["merchant_name"] or "", t["description"] or "",
-                     1 if t["amount"] > 0 else -1)).fetchone()
+            # Precise, directional corrections outrank broad merchant rules.
+            # Settlement transfers stay protected against double counting.
+            if not (t["category"] == "Überweisung" and t["merchant_name"] == "Kartenabrechnung"):
+                learned = _learned_category(t, conn)
+                rule_cat = _apply_db_rules(t.get("description") or "", t.get("merchant_name") or "", conn)
                 if learned:
-                    t.update(category=learned["category"], category_origin="learned_context")
+                    t.update(category=learned, category_origin="learned_context")
+                elif rule_cat:
+                    t.update(category=rule_cat, category_origin="rule")
             if conn.execute("SELECT 1 FROM transactions WHERE import_hash = ?", (t["import_hash"],)).fetchone():
                 skipped += 1
                 continue
             candidates = conn.execute("""
                 SELECT * FROM transactions WHERE source = ? AND account_name = ?
-                AND amount = ? AND description = ? AND booked != ?
+                AND amount = ? AND description = ?
+                AND (booked != ? OR (? = 1 AND booked_manually = 1))
                 AND transaction_date IS NOT NULL AND transaction_date = ?
                 AND ABS(julianday(date) - julianday(?)) <= 7
             """, (t["source"], t["account_name"], t["amount"], t["description"],
-                  t["booked"], t["transaction_date"], t["date"])).fetchall()
+                  t["booked"], t["booked"], t["transaction_date"], t["date"])).fetchall()
             if len(candidates) == 1:
                 old = candidates[0]
                 if not t["booked"]:
                     skipped += 1  # A stale export must not revive a pending row.
                     continue
                 conn.execute("""UPDATE transactions SET date = ?, transaction_date = ?,
-                    booked = 1, import_hash = ?, transaction_type = ? WHERE id = ?""",
+                    booked = 1, booked_manually = 0, import_hash = ?, transaction_type = ? WHERE id = ?""",
                     (t["date"], t["transaction_date"], t["import_hash"], t["transaction_type"], old["id"]))
                 reconciled += 1
                 continue
@@ -247,11 +297,14 @@ def _insert_transactions(transactions: list[dict]) -> dict:
                         :transaction_type, :booked, :import_hash, :category_origin)
             """, t)
             inserted += 1
+            new_rows.append(t)
+            unclassified += t["category"] == "Sonstiges"
         report = getattr(transactions, "report", None)
         if transactions and report and report.get("balance_verified") and report.get("period_start"):
             conn.execute("INSERT OR IGNORE INTO import_coverage VALUES (?, ?, ?, ?)",
                          (transactions[0]["source"], transactions[0]["account_name"],
                           report["period_start"], report["period_end"]))
+        suggestions = _import_rule_suggestions(conn, new_rows)
         conn.commit()
     except Exception:
         conn.rollback()
@@ -259,7 +312,8 @@ def _insert_transactions(transactions: list[dict]) -> dict:
     finally:
         conn.close()
     return {"inserted": inserted, "skipped_duplicates": skipped, "reconciled": reconciled,
-            "unclassified": sum(t["category"] == "Sonstiges" for t in transactions),
+            "suggestions": suggestions,
+            "unclassified": unclassified,
             "warnings": sorted(set(warnings)), "statement": getattr(transactions, "report", None)}
 
 
@@ -312,7 +366,7 @@ def list_transactions(
     params = []
 
     if category:
-        conditions.append("category = ?")
+        conditions.append("EXISTS (SELECT 1 FROM transaction_allocations a WHERE a.id = t.id AND a.category = ?)")
         params.append(category)
     if source:
         conditions.append("source = ?")
@@ -329,29 +383,63 @@ def list_transactions(
     thresholds, recurring = _outlier_context(conn)
     if only_outliers:
         cond, cond_params = _outlier_sql(thresholds, recurring)
-        conditions.append(cond if cond else "0")
+        conditions.append(
+            f"EXISTS (SELECT 1 FROM transaction_allocations a WHERE a.id = t.id AND {cond.replace('t.', 'a.')}"
+            f"{' AND a.category = ?' if category else ''})"
+            if cond else "0"
+        )
         params += cond_params
+        if cond and category:
+            params.append(category)
 
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
     offset = (page - 1) * page_size
 
     # `t` als Alias, weil _outlier_sql die Spalten so anspricht.
     total = conn.execute(f"SELECT COUNT(*) FROM transactions t {where}", params).fetchone()[0]
-    sum_row = conn.execute(
-        f"SELECT SUM(t.amount) AS total_sum FROM transactions t {where}", params
-    ).fetchone()
+    sum_row = conn.execute(f"""
+        SELECT SUM(a.amount) AS total_sum FROM transaction_allocations a
+        WHERE a.id IN (SELECT t.id FROM transactions t {where})
+        {"AND a.category = ?" if category else ""}
+    """, params + ([category] if category else [])).fetchone()
     rows = conn.execute(
         f"SELECT t.* FROM transactions t {where} ORDER BY {order} LIMIT ? OFFSET ?",
         params + [page_size, offset]
     ).fetchall()
+
+    ids = [r["id"] for r in rows]
+    originals_by_id = {r["id"]: r for r in rows}
+    splits_by_id = {id_: [] for id_ in ids}
+    allocations_by_id = {id_: [] for id_ in ids}
+    if ids:
+        placeholders = ",".join("?" * len(ids))
+        for split in conn.execute(f"""
+            SELECT transaction_id, category, amount_cents FROM transaction_splits
+            WHERE transaction_id IN ({placeholders}) ORDER BY transaction_id, position
+        """, ids):
+            parent = originals_by_id[split["transaction_id"]]
+            signed = -1 if parent["amount"] < 0 else 1
+            splits_by_id[split["transaction_id"]].append({
+                "category": split["category"], "amount": signed * split["amount_cents"] / 100
+            })
+        for allocation in conn.execute(f"""
+            SELECT id, date, booked, merchant_name, category, amount
+            FROM transaction_allocations WHERE id IN ({placeholders})
+        """, ids):
+            allocations_by_id[allocation["id"]].append(allocation)
 
     conn.close()
 
     out = []
     for r in rows:
         d = dict(r)
-        d["is_outlier"] = _is_outlier(r, thresholds, recurring)
-        d["outlier_threshold"] = thresholds.get(d["category"]) if d["is_outlier"] else None
+        flagged = next((a for a in allocations_by_id[r["id"]]
+                        if (not category or a["category"] == category)
+                        and _is_outlier(a, thresholds, recurring)), None)
+        d["is_outlier"] = flagged is not None
+        d["outlier_threshold"] = thresholds.get(flagged["category"]) if flagged else None
+        d["outlier_category"] = flagged["category"] if flagged else None
+        d["splits"] = splits_by_id[r["id"]]
         out.append(d)
 
     return {
@@ -372,19 +460,35 @@ def update_category(tx_id: int, body: dict):
         raise HTTPException(400, f"Unbekannte Kategorie: {category}")
     # Track correction for smart categorization
     tx = conn.execute("SELECT * FROM transactions WHERE id = ?", (tx_id,)).fetchone()
-    if tx and tx["merchant_name"]:
-        conn.execute("""INSERT INTO contextual_corrections VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT(source, account_name, merchant_name, description, direction)
-            DO UPDATE SET category = excluded.category""",
-            (tx["source"], tx["account_name"], tx["merchant_name"], tx["description"] or "",
-             1 if tx["amount"] > 0 else -1, category))
-        conn.execute("""
-            INSERT INTO category_corrections (merchant_name, category, count) VALUES (?, ?, 1)
-            ON CONFLICT(merchant_name, category) DO UPDATE SET count = count + 1
-        """, (tx["merchant_name"], category))
+    if conn.execute("SELECT 1 FROM transaction_splits WHERE transaction_id = ?", (tx_id,)).fetchone():
+        conn.close()
+        raise HTTPException(409, "Aufgeteilte Buchung bitte über die Aufteilung bearbeiten")
+    if not tx:
+        conn.close()
+        raise HTTPException(404, "Buchung nicht gefunden")
+    _remember_category(conn, tx, category)
     conn.execute("UPDATE transactions SET category = ?, category_locked = 1, category_origin = 'manual' WHERE id = ?", (category, tx_id))
     conn.commit()
     conn.close()
+    return {"ok": True}
+
+
+@app.post("/api/transactions/{tx_id}/confirm-booking")
+def confirm_booking(tx_id: int):
+    conn = get_db()
+    try:
+        tx = conn.execute("SELECT date FROM transactions WHERE id = ?", (tx_id,)).fetchone()
+        if not tx:
+            raise HTTPException(404, "Buchung nicht gefunden")
+        try:
+            date.fromisoformat(tx["date"])
+        except ValueError:
+            raise HTTPException(400, "Bitte zuerst ein gültiges Buchungsdatum setzen")
+        conn.execute("""UPDATE transactions SET booked = 1, booked_manually = 1
+            WHERE id = ? AND booked = 0""", (tx_id,))
+        conn.commit()
+    finally:
+        conn.close()
     return {"ok": True}
 
 
@@ -422,13 +526,68 @@ def batch_update_category(body: dict):
         conn.close()
         raise HTTPException(400, "Ungültige Anfrage")
     placeholders = ",".join("?" * len(ids))
+    if conn.execute(f"SELECT 1 FROM transaction_splits WHERE transaction_id IN ({placeholders}) LIMIT 1", list(ids)).fetchone():
+        conn.close()
+        raise HTTPException(409, "Auswahl enthält aufgeteilte Buchungen; diese bitte einzeln bearbeiten")
+    rows = conn.execute(f"SELECT * FROM transactions WHERE id IN ({placeholders})", list(ids)).fetchall()
+    for row in rows:
+        _remember_category(conn, row, category)
     conn.execute(
         f"UPDATE transactions SET category = ?, category_locked = 1, category_origin = 'manual' WHERE id IN ({placeholders})",
         [category] + list(ids)
     )
     conn.commit()
     conn.close()
-    return {"ok": True, "updated": len(ids)}
+    return {"ok": True, "updated": len(rows)}
+
+
+@app.put("/api/transactions/{tx_id}/splits")
+def set_transaction_splits(tx_id: int, body: dict):
+    parts = body.get("splits")
+    if not isinstance(parts, list) or len(parts) > 20 or (parts and len(parts) < 2):
+        raise HTTPException(400, "Zwei bis 20 Teilbeträge erforderlich, oder eine leere Liste zum Entfernen")
+    conn = get_db()
+    try:
+        tx = conn.execute("SELECT amount FROM transactions WHERE id = ?", (tx_id,)).fetchone()
+        if not tx:
+            raise HTTPException(404, "Buchung nicht gefunden")
+        original_cents = Decimal(str(abs(tx["amount"]))) * 100
+        if original_cents != original_cents.to_integral_value():
+            raise HTTPException(400, "Buchungsbetrag hat mehr als zwei Nachkommastellen")
+        categories = set(_all_categories(conn))
+        checked = []
+        seen = set()
+        for part in parts:
+            if not isinstance(part, dict):
+                raise HTTPException(400, "Ungültiger Teilbetrag")
+            category = str(part.get("category", "")).strip()
+            if category not in categories or category in seen:
+                raise HTTPException(400, "Jede Teilkategorie muss gültig und eindeutig sein")
+            seen.add(category)
+            try:
+                cents = Decimal(str(part.get("amount", ""))) * 100
+            except InvalidOperation:
+                raise HTTPException(400, "Ungültiger Teilbetrag")
+            if not cents.is_finite() or cents != cents.to_integral_value() or cents <= 0:
+                raise HTTPException(400, "Teilbeträge müssen positiv sein und höchstens zwei Nachkommastellen haben")
+            if cents > original_cents:
+                raise HTTPException(400, "Teilbetrag ist größer als die Buchung")
+            checked.append((tx_id, len(checked), category, int(cents)))
+        if parts and sum(row[3] for row in checked) != int(original_cents):
+            raise HTTPException(400, "Teilbeträge müssen genau den Buchungsbetrag ergeben")
+        conn.execute("DELETE FROM transaction_splits WHERE transaction_id = ?", (tx_id,))
+        if checked:
+            conn.executemany("""INSERT INTO transaction_splits
+                (transaction_id, position, category, amount_cents) VALUES (?, ?, ?, ?)""", checked)
+            conn.execute("UPDATE transactions SET category_locked = 1, category_origin = 'manual' WHERE id = ?", (tx_id,))
+        conn.commit()
+        return {"ok": True, "splits": [{"category": row[2],
+                    "amount": (-1 if tx["amount"] < 0 else 1) * row[3] / 100} for row in checked]}
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 @app.post("/api/transactions")
@@ -523,19 +682,19 @@ def delete_rule(rule_id: int):
 def apply_rules_to_all():
     """Re-apply all DB rules to existing transactions."""
     conn = get_db()
-    rules = conn.execute(
-        "SELECT pattern, category FROM category_rules ORDER BY priority DESC, id"
-    ).fetchall()
+    rules = _ordered_category_rules(conn)
     if not rules:
         conn.close()
         return {"updated": 0}
 
-    rows = conn.execute("SELECT id, description, merchant_name FROM transactions WHERE category_locked = 0 AND category_origin != 'legacy'").fetchall()
+    rows = conn.execute("SELECT id, description, merchant_name, category FROM transactions WHERE category_locked = 0 AND category_origin NOT IN ('legacy', 'learned_context')").fetchall()
     updated = 0
     for row in rows:
-        text = ((row["description"] or "") + " " + (row["merchant_name"] or "")).lower()
+        if row["category"] == "Überweisung" and row["merchant_name"] == "Kartenabrechnung":
+            continue
+        text = normalize_category_text((row["description"] or "") + " " + (row["merchant_name"] or ""))
         for rule in rules:
-            if rule["pattern"] in text:
+            if normalize_category_text(rule["pattern"]) in text:
                 conn.execute("UPDATE transactions SET category = ?, category_origin = 'rule' WHERE id = ?", (rule["category"], row["id"]))
                 updated += 1
                 break
@@ -548,7 +707,7 @@ def apply_rules_to_all():
 
 # Alle Auswertungen laufen über diesen Join, damit die Art einer Kategorie
 # (Konsum / Sparen / Umbuchung / Einkommen) überall gleich behandelt wird.
-TX = "transactions t LEFT JOIN categories c ON c.name = t.category"
+TX = "transaction_allocations t LEFT JOIN categories c ON c.name = t.category"
 KIND = "COALESCE(c.kind, 'consumption')"
 NECESSITY = "COALESCE(c.necessity, 'discretionary')"
 
@@ -557,7 +716,8 @@ def _data_quality(conn):
     accounts = [dict(r) for r in conn.execute("""SELECT source, account_name,
         MAX(CASE WHEN booked = 1 AND date != '0000-00-00' THEN date END) AS last_booking,
         SUM(CASE WHEN booked = 0 THEN 1 ELSE 0 END) AS pending,
-        SUM(CASE WHEN category = 'Sonstiges' THEN 1 ELSE 0 END) AS unclassified
+        SUM(CASE WHEN EXISTS (SELECT 1 FROM transaction_allocations a
+            WHERE a.id = transactions.id AND a.category = 'Sonstiges') THEN 1 ELSE 0 END) AS unclassified
         FROM transactions GROUP BY source, account_name""")]
     for account in accounts:
         account["confirmed_through"] = conn.execute(
@@ -777,6 +937,8 @@ def stats_summary(period: str = Query(None), month: str = Query(None)):
     quality = _data_quality(conn)
     fraction = periods.elapsed_fraction(p) if quality["forecast_ready"] else None
     fixed_ctx = _fixed_forecast_context(conn, p, fraction)
+    # Eine Buchung mit mehreren Kategorien bleibt eine Buchung.
+    count = conn.execute(f"SELECT COUNT(DISTINCT t.id) FROM {TX} {where} AND {KIND} != 'transfer'", params).fetchone()[0]
     conn.close()
 
     agg = {r["kind"]: r for r in rows}
@@ -793,7 +955,6 @@ def stats_summary(period: str = Query(None), month: str = Query(None)):
     income = inc_in - inc_out         # Rückbuchungen mindern die Einnahmen
     consumption = con_out - con_in    # Erstattungen mindern den Konsum
     savings = sav_out - sav_in        # Entnahmen mindern die Sparrate
-    count = sum((r["n"] or 0) for k, r in agg.items() if k != "transfer")
 
     return {
         "income":       round(income, 2),
@@ -854,7 +1015,7 @@ def _fixed_forecast_context(conn, p: periods.Period, fraction: float | None, as_
     pending = []
     for info in items:
         cat, kind = info["category"], info["kind"]
-        rows = conn.execute("""SELECT date, amount FROM transactions
+        rows = conn.execute("""SELECT date, amount FROM transaction_allocations
             WHERE source = ? AND account_name = ? AND merchant_name = ? AND category = ?
             AND booked = 1 AND date >= ? AND date < ? AND date <= ?""",
             (info["source"], info["account_name"], info["merchant_name"], cat, p.start, p.end, as_of)).fetchall()
@@ -1251,6 +1412,10 @@ def _recurring_items(conn, as_of: str | None = None) -> list[dict]:
     overrides = {(r["merchant_name"], r["category"]): r["recurring_type"] for r in
                  conn.execute("SELECT merchant_name, category, recurring_type FROM merchant_overrides").fetchall()}
 
+    exclusions = {tuple(r) for r in conn.execute(
+        "SELECT source, account_name, merchant_name, category FROM recurring_exclusions"
+    ).fetchall()}
+
     rows = conn.execute(f"""
         SELECT t.source, t.account_name, t.merchant_name AS merchant_name, t.category AS category,
                t.date AS date, t.amount AS amount, {KIND} AS kind
@@ -1262,7 +1427,7 @@ def _recurring_items(conn, as_of: str | None = None) -> list[dict]:
         ORDER BY t.source, t.account_name, t.merchant_name, t.category, t.date
     """, (as_of,)).fetchall()
 
-    by_item: dict[tuple[str, str], list] = {}
+    by_item: dict[tuple[str, str, str, str], list] = {}
     for r in rows:
         by_item.setdefault((r["source"], r["account_name"], r["merchant_name"], r["category"]), []).append(r)
 
@@ -1275,23 +1440,41 @@ def _recurring_items(conn, as_of: str | None = None) -> list[dict]:
         amounts = [abs(e["amount"]) for e in entries]
         first_date, last_date = entries[0]["date"], entries[-1]["date"]
         med = analytics.median(amounts)
-        spread = max(amounts) - min(amounts)
         gaps = [periods.months_between(a, b) - 1 for a, b in zip(months, months[1:])]
         interval = int(analytics.median(gaps))
         regular = interval in (1, 2, 3, 6, 12) and all(g == interval for g in gaps)
         one_per_month = len(entries) == len(months)
-        recent = amounts[-3:]
-        stable = med > 0 and (max(recent) - min(recent)) / med < 0.05
+        # Repeated purchases alone are not evidence of a payment schedule.
+        # Require three occurrences, one per month and dates within four days
+        # of the expected calendar day (clamped for February/month-end).
+        days = sorted(int(e["date"][8:10]) for e in entries)
+        typical_day = int(analytics.median([float(d) for d in days]))
+        consistent_day = all(abs(int(e["date"][8:10]) - int(periods._day_in_month(
+            int(e["date"][:4]), int(e["date"][5:7]), typical_day
+        )[8:10])) <= 4 for e in entries)
+        scheduled = regular and one_per_month and consistent_day
+        recent = amounts[-6:]
+        recent_med = analytics.median(recent)
+        stable = recent_med > 0 and (max(recent) - min(recent)) / recent_med < 0.05
         # Ein einzelner Preissprung macht ein zuvor stabiles Abo nicht zu
         # einer variablen Ausgabe und soll als Erhöhung sichtbar bleiben.
-        previous = amounts[-4:-1]
-        if len(previous) == 3:
+        previous = amounts[-7:-1]
+        price_step = False
+        if len(previous) >= 3:
             previous_med = analytics.median(previous)
-            stable = stable or (previous_med > 0
-                                and (max(previous) - min(previous)) / previous_med < 0.05
-                                and (amounts[-1] - previous_med) / previous_med > 0.10)
-        auto_type = "fix" if regular and one_per_month and stable else "variabel"
+            price_step = (previous_med > 0
+                          and (max(previous) - min(previous)) / previous_med < 0.05
+                          and 0.10 < (amounts[-1] - previous_med) / previous_med <= 0.50)
+            stable = stable or price_step
+        comparable = recent_med > 0 and (max(recent) - min(recent)) / recent_med <= 0.30
+        detected = len(months) >= 3 and scheduled and (comparable or price_step)
         override = overrides.get((merchant, category))
+        excluded = (source, account, merchant, category) in exclusions
+        # Keep explicit user choices and excluded rows reachable even if a
+        # stream no longer passes the stricter automatic detection.
+        if not detected and override is None and not excluded:
+            continue
+        auto_type = "fix" if scheduled and stable else "variabel"
         rec_type = override if override in ("fix", "variabel") else auto_type
 
         # Monatliche Belastung über die tatsächlich abgedeckte Spanne, damit
@@ -1309,14 +1492,12 @@ def _recurring_items(conn, as_of: str | None = None) -> list[dict]:
                    and abs(last_amount - prev_med) / prev_med > 0.10)
 
         # Typischer Abbuchungstag → nächste erwartete Buchung.
-        days = sorted(int(e["date"][8:10]) for e in entries)
-        typical_day = int(analytics.median([float(d) for d in days]))
         next_y, next_m = periods._add_months(int(last_date[:4]), int(last_date[5:7]), max(interval, 1))
         due = periods._day_in_month(next_y, next_m, typical_day)
         # Overdue for an entire cadence: retain in the list but stop assuming
         # the contract is active. Missing imports are surfaced separately.
         expiry_y, expiry_m = periods._add_months(next_y, next_m, max(interval, 1))
-        active = as_of < periods._day_in_month(expiry_y, expiry_m, typical_day)
+        active = not excluded and as_of < periods._day_in_month(expiry_y, expiry_m, typical_day)
         next_expected = due
         while next_expected < as_of:
             next_y, next_m = periods._add_months(next_y, next_m, max(interval, 1))
@@ -1325,12 +1506,13 @@ def _recurring_items(conn, as_of: str | None = None) -> list[dict]:
         result.append({
             "source": source, "account_name": account,
             "interval_months": interval if regular else None, "active": active,
+            "excluded": excluded,
             "merchant_name": merchant,
             "category": category,
             "kind": entries[-1]["kind"],
             "type": rec_type,
             "type_auto": auto_type,
-            "type_overridden": override is not None and override != auto_type,
+            "type_overridden": override is not None,
             "months": len(months),
             "count": len(entries),
             "median_amount": round(med, 2),
@@ -1371,6 +1553,7 @@ def _upcoming_payments(items: list[dict], today: date, days: int) -> list[dict]:
                     "merchant_name": item["merchant_name"],
                     "category": item["category"],
                     "account_name": item["account_name"],
+                    "source": item["source"],
                     "kind": item["kind"],
                     "amount": item["last_amount"],
                     "price_increase": item["price_change"] if item["price_changed"]
@@ -1418,6 +1601,33 @@ def stats_recurring():
         "price_increases":  sum(1 for r in costs if r["price_changed"] and r["price_change"]["diff"] > 0),
         "items": result,
     }
+
+
+@app.put("/api/recurring/exclusion")
+def set_recurring_exclusion(body: dict):
+    """Exclude or restore one payment stream without changing booked history."""
+    fields = ("source", "account_name", "merchant_name", "category")
+    if any(not isinstance(body.get(field), str) for field in fields):
+        raise HTTPException(400, "Zahlungsstrom muss vollständig angegeben werden")
+    if type(body.get("excluded")) is not bool:
+        raise HTTPException(400, "excluded muss ein Wahrheitswert sein")
+    key = tuple(body[field] for field in fields)
+    conn = get_db()
+    try:
+        if body["excluded"]:
+            exists = conn.execute("""SELECT 1 FROM transaction_allocations
+                WHERE source = ? AND account_name = ? AND merchant_name = ? AND category = ?
+                LIMIT 1""", key).fetchone()
+            if not exists:
+                raise HTTPException(404, "Zahlungsstrom nicht gefunden")
+            conn.execute("INSERT OR IGNORE INTO recurring_exclusions VALUES (?, ?, ?, ?)", key)
+        else:
+            conn.execute("""DELETE FROM recurring_exclusions
+                WHERE source = ? AND account_name = ? AND merchant_name = ? AND category = ?""", key)
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True, "excluded": body["excluded"]}
 
 
 @app.put("/api/recurring/{merchant_name}/{category}/type")
@@ -1563,7 +1773,8 @@ def rename_category(old_name: str, body: dict):
     try:
         conn.execute("UPDATE categories SET name = ? WHERE name = ?", (new_name, old_name))
         conn.execute("UPDATE transactions SET category = ? WHERE category = ?", (new_name, old_name))
-        for table in ("category_rules", "category_budgets", "category_corrections", "contextual_corrections", "merchant_overrides"):
+        conn.execute("UPDATE transaction_splits SET category = ? WHERE category = ?", (new_name, old_name))
+        for table in ("category_rules", "category_budgets", "category_corrections", "contextual_corrections", "merchant_overrides", "recurring_exclusions", "dismissed_rule_suggestions"):
             conn.execute(f"UPDATE {table} SET category = ? WHERE category = ?", (new_name, old_name))
         conn.commit()
     except sqlite3.IntegrityError:
@@ -1578,12 +1789,34 @@ def delete_category(name: str):
     if name == "Sonstiges":
         raise HTTPException(400, '"Sonstiges" kann nicht gelöscht werden')
     conn = get_db()
-    conn.execute("DELETE FROM categories WHERE name = ?", (name,))
-    for table in ("category_rules", "category_budgets", "category_corrections", "contextual_corrections", "merchant_overrides"):
-        conn.execute(f"DELETE FROM {table} WHERE category = ?", (name,))
-    conn.execute("UPDATE transactions SET category = 'Sonstiges' WHERE category = ?", (name,))
-    conn.commit()
-    conn.close()
+    try:
+        affected = [r[0] for r in conn.execute(
+            "SELECT DISTINCT transaction_id FROM transaction_splits WHERE category = ?", (name,))]
+        conn.execute("DELETE FROM categories WHERE name = ?", (name,))
+        for table in ("category_rules", "category_budgets", "category_corrections", "contextual_corrections", "merchant_overrides", "recurring_exclusions", "dismissed_rule_suggestions"):
+            conn.execute(f"DELETE FROM {table} WHERE category = ?", (name,))
+        conn.execute("UPDATE transactions SET category = 'Sonstiges' WHERE category = ?", (name,))
+        conn.execute("UPDATE transaction_splits SET category = 'Sonstiges' WHERE category = ?", (name,))
+        for tx_id in affected:
+            rows = conn.execute("""SELECT category, SUM(amount_cents) AS cents
+                FROM transaction_splits WHERE transaction_id = ?
+                GROUP BY category ORDER BY MIN(position)""", (tx_id,)).fetchall()
+            count = conn.execute("SELECT COUNT(*) FROM transaction_splits WHERE transaction_id = ?", (tx_id,)).fetchone()[0]
+            if len(rows) == count:
+                continue
+            conn.execute("DELETE FROM transaction_splits WHERE transaction_id = ?", (tx_id,))
+            if len(rows) == 1:
+                conn.execute("UPDATE transactions SET category = ? WHERE id = ?", (rows[0]["category"], tx_id))
+            else:
+                conn.executemany("""INSERT INTO transaction_splits
+                    (transaction_id, position, category, amount_cents) VALUES (?, ?, ?, ?)""",
+                    [(tx_id, pos, row["category"], row["cents"]) for pos, row in enumerate(rows)])
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
     return {"ok": True}
 
 
@@ -1633,7 +1866,8 @@ def budget_status(month: str = Query(None), period: str = Query(None)):
     conn = get_db()
     p = _resolve_period(conn, period, month)
     if not p.bounded:
-        latest = _latest_month(conn)
+        latest = conn.execute("""SELECT MAX(substr(date, 1, 7)) FROM transactions
+            WHERE date != '0000-00-00'""").fetchone()[0]
         if not latest:
             conn.close()
             return {"month": None, "period": None, "categories": []}
@@ -1653,6 +1887,15 @@ def budget_status(month: str = Query(None), period: str = Query(None)):
         GROUP BY t.category
     """, params).fetchall()}
 
+    # Vormerkungen reservieren Budget, bleiben aber getrennt von Ist-Ausgaben.
+    pending_where, pending_params = p.where("t.date")
+    pending = {r["category"]: r["total"] for r in conn.execute(f"""
+        SELECT t.category, -SUM(t.amount) AS total FROM {TX}
+        WHERE {pending_where} AND t.booked = 0 AND t.amount < 0
+          AND {KIND} = 'consumption'
+        GROUP BY t.category
+    """, pending_params)}
+
     # Nur gesetzt, wenn `p` gerade läuft – Hochrechnung für abgeschlossene
     # Monate wäre gegenstandslos, die Ist-Werte sind dort schon final.
     quality = _data_quality(conn)
@@ -1664,7 +1907,7 @@ def budget_status(month: str = Query(None), period: str = Query(None)):
         # Bekannte Fixkosten dieser Kategorie fließen mit ihrem erwarteten
         # Betrag ein, der Rest weiter linear nach Tages-Anteil – siehe
         # `_forecast` für die Begründung.
-        if not fraction or fraction >= 1:
+        if not fraction or fraction >= 1 or pending.get(cat, 0):
             return None
         actual_fixed = fixed_ctx["actual_by_category"].get(cat, 0.0) if fixed_ctx else 0.0
         projected_fixed = fixed_ctx["projected_by_category"].get(cat, 0.0) if fixed_ctx else 0.0
@@ -1675,6 +1918,8 @@ def budget_status(month: str = Query(None), period: str = Query(None)):
     seen = set()
     for cat, budget in sorted(budgets.items()):
         spent = spending.get(cat, 0)
+        reserved = pending.get(cat, 0)
+        used = spent + reserved
         scaled = budget * factor
         forecast = _forecast_spent(cat, spent)
         result.append({
@@ -1682,17 +1927,22 @@ def budget_status(month: str = Query(None), period: str = Query(None)):
             "budget": round(scaled, 2),
             "monthly_budget": budget,
             "spent": round(spent, 2),
-            "pct": round(spent / scaled * 100, 1) if scaled > 0 else 0,
-            "remaining": round(scaled - spent, 2),
+            "pending": round(reserved, 2),
+            "used": round(used, 2),
+            "pct": round(used / scaled * 100, 1) if scaled > 0 else 0,
+            "remaining": round(scaled - used, 2),
             "forecast_remaining": round(scaled - forecast, 2) if forecast is not None else None,
             "forecast": forecast,
             "forecast_pct": round(forecast / scaled * 100, 1) if forecast is not None and scaled > 0 else None,
         })
         seen.add(cat)
-    for cat, spent in sorted(spending.items()):
+    for cat in sorted(spending.keys() | pending.keys()):
+        spent = spending.get(cat, 0)
         if cat not in seen:
             result.append({"category": cat, "budget": None, "monthly_budget": None,
                            "spent": round(spent, 2), "pct": None,
+                           "pending": round(pending.get(cat, 0), 2),
+                           "used": round(spent + pending.get(cat, 0), 2),
                            "forecast": _forecast_spent(cat, spent), "forecast_pct": None})
 
     return {"month": p.start[:7], "period": _period_info(p),
@@ -1725,31 +1975,66 @@ def set_setting(key: str, body: dict):
 
 # ─── Import suggestions ────────────────────────────────────────────────────────
 
-@app.get("/api/import/suggestions")
-def import_suggestions():
-    """Return merchants frequently corrected to same category, without an existing rule."""
-    conn = get_db()
-    corrections = conn.execute(
-        "SELECT merchant_name, category, count FROM category_corrections WHERE count >= 2 ORDER BY count DESC"
-    ).fetchall()
-    rules = [r["pattern"] for r in conn.execute("SELECT pattern FROM category_rules").fetchall()]
-    conn.close()
-
-    suggestions = []
-    seen_merchants = set()
-    for row in corrections:
-        merchant = row["merchant_name"]
-        if merchant in seen_merchants:
+def _import_rule_suggestions(conn, imported):
+    """Suggest only useful, unambiguous rules for this import's new rows."""
+    if not imported:
+        return []
+    evidence = {}
+    for row in conn.execute("""SELECT t.* FROM transactions t
+        WHERE category_origin = 'manual' AND category_locked = 1
+          AND NOT EXISTS (SELECT 1 FROM transaction_splits s WHERE s.transaction_id = t.id)"""):
+        key = normalize_category_text(row["merchant_name"] or "")
+        if key:
+            evidence.setdefault(key, []).append(row)
+    dismissed = {(r["merchant_key"], r["category"]) for r in conn.execute(
+        "SELECT merchant_key, category FROM dismissed_rule_suggestions")}
+    split_merchants = {normalize_category_text(r[0] or "") for r in conn.execute("""
+        SELECT DISTINCT t.merchant_name FROM transactions t
+        WHERE EXISTS (SELECT 1 FROM transaction_splits s WHERE s.transaction_id = t.id)""")}
+    categories = set(_all_categories(conn))
+    suggestions = {}
+    for tx in imported:
+        merchant = (tx["merchant_name"] or "").strip()
+        key = normalize_category_text(merchant)
+        examples = evidence.get(key, [])
+        # Broad provider rules easily misclassify unrelated purchases.
+        if key in split_merchants or len(key) < 4 or re.match(r"^(paypal|klarna|riverty|visa|mastercard)\b", key):
             continue
-        seen_merchants.add(merchant)
-        already_covered = any(rule in merchant.lower() for rule in rules)
-        if not already_covered:
-            suggestions.append({
-                "merchant_name": merchant,
-                "suggested_category": row["category"],
-                "count": row["count"],
-            })
-    return suggestions
+        if len(examples) < 3 or tx["category_origin"] != "parser":
+            continue
+        choices = {r["category"] for r in examples}
+        if len(choices) != 1:
+            continue
+        category = next(iter(choices))
+        if category not in categories or category == "Sonstiges" or category == tx["category"]:
+            continue
+        if (key, category) in dismissed:
+            continue
+        if any((r["amount"] > 0) != (tx["amount"] > 0) for r in examples):
+            continue
+        if _apply_db_rules(tx["description"] or "", merchant, conn):
+            continue
+        suggestions[key] = {"merchant_name": merchant, "pattern": key,
+                            "suggested_category": category, "count": len(examples)}
+    return sorted(suggestions.values(), key=lambda s: (-s["count"], s["pattern"]))[:5]
+
+
+@app.post("/api/import/suggestions/dismiss")
+def dismiss_import_suggestion(body: dict):
+    merchant = normalize_category_text(str(body.get("merchant_name", "")))
+    category = str(body.get("category", "")).strip()
+    if not merchant or not category:
+        raise HTTPException(400, "Händler und Kategorie erforderlich")
+    conn = get_db()
+    try:
+        if category not in _all_categories(conn):
+            raise HTTPException(400, "Unbekannte Kategorie")
+        conn.execute("INSERT OR IGNORE INTO dismissed_rule_suggestions VALUES (?, ?)",
+                     (merchant, category))
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True}
 
 
 @app.get("/api/months")
@@ -1773,21 +2058,26 @@ def export_csv(month: str = Query(None), period: str = Query(None)):
     p = _resolve_period(conn, period, month)
     where, params = _where(p, "1=1") if p.bounded else ("", [])
     rows = conn.execute(f"""
-        SELECT t.date, t.merchant_name, t.description, t.category,
+        SELECT t.id, t.date, t.merchant_name, t.description, t.category,
                COALESCE(c.kind, 'consumption') AS kind,
-               t.amount, t.source, t.account_name, t.note
-        FROM {TX} {where} ORDER BY t.date DESC
+               t.amount, t.source, t.account_name, t.note,
+               original.amount AS original_amount, t.split_position
+        FROM {TX} JOIN transactions original ON original.id = t.id
+        {where} ORDER BY t.date DESC, t.id DESC, t.split_position
     """, params).fetchall()
     conn.close()
 
     output = io.StringIO()
     writer = csv.writer(output, delimiter=";")
     writer.writerow(["Datum", "Händler", "Beschreibung", "Kategorie", "Art",
-                     "Betrag", "Konto", "Quelle", "Notiz"])
+                     "Betrag", "Konto", "Quelle", "Notiz", "Buchung-ID",
+                     "Originalbetrag", "Teilposition"])
     for r in rows:
         writer.writerow([r["date"], r["merchant_name"] or "", r["description"] or "",
                          r["category"], r["kind"], r["amount"],
-                         r["account_name"], r["source"], r["note"] or ""])
+                         r["account_name"], r["source"], r["note"] or "",
+                         r["id"], r["original_amount"],
+                         "" if r["split_position"] is None else r["split_position"] + 1])
 
     filename = f"haushaltsbuch_{p.start[:7] if p.bounded else 'gesamt'}.csv"
     return StreamingResponse(

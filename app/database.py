@@ -57,6 +57,7 @@ CATEGORY_NECESSITY = {
 def get_db():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys=ON")
     # journal_mode ist in der DB-Datei persistiert und wird einmalig in init_db()
     # gesetzt – hier nur die Pragmas, die pro Verbindung gelten.
     #
@@ -128,6 +129,12 @@ def init_db():
             value TEXT
         );
 
+        CREATE TABLE IF NOT EXISTS dismissed_rule_suggestions (
+            merchant_key TEXT NOT NULL,
+            category TEXT NOT NULL,
+            PRIMARY KEY (merchant_key, category)
+        );
+
         CREATE TABLE IF NOT EXISTS import_coverage (
             source TEXT NOT NULL,
             account_name TEXT NOT NULL,
@@ -166,6 +173,26 @@ def init_db():
             recurring_type TEXT NOT NULL CHECK (recurring_type IN ('fix', 'variabel')),
             PRIMARY KEY (merchant_name, category)
         );
+
+        -- Ausgeschlossene Zahlungsströme bleiben unabhängig von Fix/Variabel
+        -- gespeichert, damit neue Importe sie nicht wieder aktivieren.
+        CREATE TABLE IF NOT EXISTS recurring_exclusions (
+            source        TEXT NOT NULL,
+            account_name  TEXT NOT NULL,
+            merchant_name TEXT NOT NULL,
+            category      TEXT NOT NULL,
+            PRIMARY KEY (source, account_name, merchant_name, category)
+        );
+
+        CREATE TABLE IF NOT EXISTS transaction_splits (
+            transaction_id INTEGER NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
+            position       INTEGER NOT NULL,
+            category       TEXT NOT NULL,
+            amount_cents   INTEGER NOT NULL CHECK (amount_cents > 0),
+            PRIMARY KEY (transaction_id, position)
+        );
+        CREATE INDEX IF NOT EXISTS idx_transaction_splits_category
+            ON transaction_splits(category);
     """)
     conn.commit()
 
@@ -209,6 +236,7 @@ def init_db():
     # Migrations
     for stmt in [
         "ALTER TABLE transactions ADD COLUMN note TEXT",
+        "ALTER TABLE transactions ADD COLUMN booked_manually INTEGER NOT NULL DEFAULT 0",
         # Art der Kategorie: trennt echten Konsum von Sparen und reinen
         # Umbuchungen, damit die Ausgaben-Kennzahl nicht Sparraten mitzählt.
         "ALTER TABLE categories ADD COLUMN kind TEXT NOT NULL DEFAULT 'consumption'",
@@ -222,6 +250,26 @@ def init_db():
             conn.commit()
         except Exception:
             pass
+
+    # Jede Originalbuchung zählt entweder einmal oder über ihre Teilbeträge.
+    # Die Spaltenliste wird aus der Tabelle abgeleitet, damit spätere additive
+    # Transaktionsspalten in beiden Zweigen der View dieselbe Form behalten.
+    columns = [r["name"] for r in conn.execute("PRAGMA table_info(transactions)")]
+    split_columns = ", ".join(
+        "CASE WHEN t.amount < 0 THEN -s.amount_cents / 100.0 ELSE s.amount_cents / 100.0 END AS amount"
+        if name == "amount" else "s.category AS category" if name == "category"
+        else f"t.{name}" for name in columns
+    )
+    conn.execute("DROP VIEW IF EXISTS transaction_allocations")
+    conn.execute(f"""
+        CREATE VIEW transaction_allocations AS
+        SELECT t.*, NULL AS split_position FROM transactions t
+        WHERE NOT EXISTS (SELECT 1 FROM transaction_splits s WHERE s.transaction_id = t.id)
+        UNION ALL
+        SELECT {split_columns}, s.position AS split_position
+        FROM transactions t JOIN transaction_splits s ON s.transaction_id = t.id
+    """)
+    conn.commit()
 
     # Kategorien müssen vor der einmaligen Zuordnung ihrer Arten existieren.
     for name in DEFAULT_CATEGORIES:

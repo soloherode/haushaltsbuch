@@ -200,6 +200,9 @@ button.danger:hover { background: rgba(239,68,68,.15); }
 .upcoming-meta { font-size:11px; color:var(--text2); }
 .upcoming-amount { font-family:'JetBrains Mono',monospace; font-size:13px; font-weight:700; white-space:nowrap; text-align:right; }
 .upcoming-alert { color:var(--orange); font-size:11px; font-weight:600; }
+.recurring-action { font-size:11px; padding:5px 8px; margin-top:6px; }
+.recurring-filter { display:flex; align-items:center; gap:8px; color:var(--text2); font-size:13px; margin-bottom:12px; }
+.recurring-filter input { width:auto; }
 .upcoming-empty { color:var(--text2); font-size:13px; padding:12px 0; }
 
 /* ── KPI row ── */
@@ -208,7 +211,7 @@ button.danger:hover { background: rgba(239,68,68,.15); }
 @media (max-width: 1100px) { .kpi-row-4 { grid-template-columns: repeat(2,1fr); } }
 
 /* ── Ausreißer & Zeitraum ── */
-.badge-out {
+.badge-out, .badge-pending {
   display: inline-flex; align-items: center; gap: 4px; margin-left: 6px;
   padding: 1px 6px; border-radius: 6px; font-size: 10px; font-weight: 600;
   background: rgba(249,115,22,.12); color: var(--orange);
@@ -463,6 +466,16 @@ th.sortable.desc::after { content: '↓'; opacity: .8; color: var(--lime); }
 .modal-close { background: none; border: none; color: var(--text2); font-size: 20px; cursor: pointer; padding: 0; line-height: 1; box-shadow: none; }
 .modal-close:hover { color: var(--text); transform: none; }
 .modal-footer { display: flex; gap: 10px; justify-content: flex-end; margin-top: 24px; }
+.split-row { display:grid; grid-template-columns:minmax(0,1fr) 125px 36px; gap:8px; margin:8px 0; align-items:center; }
+.split-head { display:grid; grid-template-columns:minmax(0,1fr) 125px 36px; gap:8px; color:var(--text2); font-size:11px; }
+.split-row input, .split-row select { width:100%; }
+.split-row button { padding:7px; }
+.split-line { display:flex; justify-content:space-between; gap:12px; color:var(--text2); font-size:12px; margin-top:12px; }
+.split-parts { font-size:11px; color:var(--text2); line-height:1.6; }
+@media (max-width: 520px) {
+  .split-row, .split-head { grid-template-columns:minmax(0,1fr) 95px 32px; gap:5px; }
+  .split-row input, .split-row select { font-size:12px; }
+}
 
 /* ── Mobile header & burger menu ── */
 .mobile-header {
@@ -969,12 +982,13 @@ th.sortable.desc::after { content: '↓'; opacity: .8; color: var(--lime); }
         <div class="kpi"><div class="kpi-icon blue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 14 15 20 7"/><polyline points="14 7 20 7 20 13"/></svg></div><div class="kpi-label">Preiserhöhungen</div>
           <div class="kpi-value blue" id="abo-inc">—</div><div class="kpi-sub">bei festen Abos</div></div>
       </div>
-      <div class="card" style="margin-bottom:16px"><p style="color:var(--text3);font-size:13px">Händler mit Buchungen in mindestens zwei Monaten. „Fix“ = Betrag schwankt unter 5 % – lässt sich per Klick auf den Typ übersteuern, z. B. wenn ein Abo trotz Preiserhöhung fix bleiben soll. Fix eingestufte Positionen fließen mit ihrem erwarteten Betrag in die Monatshochrechnung ein.</p></div>
+      <div class="card" style="margin-bottom:16px"><p style="color:var(--text3);font-size:13px">Automatisch erkannt werden mindestens drei Zahlungen mit gleichmäßigem Monatsabstand (1, 2, 3, 6 oder 12 Monate), höchstens einer Zahlung pro Monat und ähnlichem Buchungstag (±4 Tage). Die letzten bis zu sechs Beträge dürfen höchstens 30 % auseinanderliegen. „Fix“ = Schwankung unter 5 %; eine einzelne Preiserhöhung bis 50 % nach mindestens drei stabilen Zahlungen bleibt fix. Manuelle Einstufungen bleiben erhalten und lassen sich mit ↺ zurücksetzen. Fix eingestufte Positionen fließen mit ihrem erwarteten Betrag in die Monatshochrechnung ein. Mit „Nicht mehr wiederkehrend“ entfernst du einen Zahlungsstrom aus den anstehenden Buchungen, den Summen und der Hochrechnung. Bisherige Buchungen bleiben erhalten.</p></div>
       <div class="card">
+        <label class="recurring-filter"><input type="checkbox" id="abo-show-excluded" onchange="loadRecurring()"> <span id="abo-excluded-label">Ausgeschlossene anzeigen</span></label>
         <div class="table-wrap">
           <table>
             <thead><tr>
-              <th class="sortable" data-col="merchant_name" onclick="sortBy('abo-body','merchant_name')">Händler</th>
+              <th class="sortable" data-col="merchant_name" onclick="sortBy('abo-body','merchant_name')">Händler / Konto</th>
               <th class="sortable" data-col="category" onclick="sortBy('abo-body','category')">Kategorie</th>
               <th class="sortable" data-col="type" onclick="sortBy('abo-body','type')">Typ</th>
               <th class="sortable" data-col="median_amount" onclick="sortBy('abo-body','median_amount')" style="text-align:right">Median</th>
@@ -982,6 +996,7 @@ th.sortable.desc::after { content: '↓'; opacity: .8; color: var(--lime); }
               <th class="sortable" data-col="yearly_cost" onclick="sortBy('abo-body','yearly_cost')" style="text-align:right">pro Jahr</th>
               <th class="sortable" data-col="next_expected" onclick="sortBy('abo-body','next_expected')">nächste</th>
               <th class="sortable" data-col="price_pct" onclick="sortBy('abo-body','price_pct')">Preisänderung</th>
+              <th>Aktion</th>
             </tr></thead>
             <tbody id="abo-body"></tbody>
           </table>
@@ -1081,6 +1096,7 @@ th.sortable.desc::after { content: '↓'; opacity: .8; color: var(--lime); }
       </div>
       <input type="file" id="f-unified" accept=".csv" style="display:none" onchange="uploadUnified(this)">
       <div class="msg" id="msg-unified"></div>
+      <button class="sec" id="suggestions-review" style="display:none" onclick="checkSuggestions()"></button>
     </div>
 
     <div class="sh">Manueller Eintrag</div>
@@ -1197,6 +1213,32 @@ th.sortable.desc::after { content: '↓'; opacity: .8; color: var(--lime); }
   </div>
 </div>
 
+<div class="modal-backdrop" id="split-modal" onclick="if(event.target===this)closeSplitModal()">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="split-title" style="max-width:560px;max-height:calc(100vh - 32px);overflow:auto">
+    <div class="modal-header">
+      <h2 id="split-title">Buchung aufteilen</h2>
+      <button class="modal-close" onclick="closeSplitModal()" aria-label="Schließen">✕</button>
+    </div>
+    <p id="split-summary" style="color:var(--text2);font-size:13px;margin-bottom:16px"></p>
+    <div class="split-head">
+      <span>Kategorie</span><span>Betrag in €</span><span></span>
+    </div>
+    <div id="split-rows"></div>
+    <button class="sec" onclick="addSplitRow()" style="margin-top:8px">+ Teilbetrag</button>
+    <div class="split-line"><span>Originalbetrag</span><strong id="split-original"></strong></div>
+    <div class="split-line"><span>Summe der Teile</span><strong id="split-total"></strong></div>
+    <div class="split-line"><span>Noch zuzuordnen</span><strong id="split-remaining"></strong></div>
+    <div class="msg" id="split-msg"></div>
+    <div class="modal-footer" style="justify-content:space-between;flex-wrap:wrap">
+      <button class="danger" id="split-remove" onclick="removeSplits()">Aufteilung entfernen</button>
+      <div style="display:flex;gap:8px">
+        <button class="sec" onclick="closeSplitModal()">Abbrechen</button>
+        <button onclick="saveSplits()">Speichern</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- ── SUGGESTIONS MODAL ─────────────────────────────────────────────────────── -->
 <div class="modal-backdrop" id="suggestions-modal" onclick="if(event.target===this)this.classList.remove('open')">
   <div class="modal" style="max-width:540px">
@@ -1204,7 +1246,7 @@ th.sortable.desc::after { content: '↓'; opacity: .8; color: var(--lime); }
       <h2>💡 Regelvorschläge</h2>
       <button class="modal-close" onclick="document.getElementById('suggestions-modal').classList.remove('open')">✕</button>
     </div>
-    <p style="color:var(--text3);font-size:13px;margin-bottom:16px">Diese Händler wurden oft manuell umkategorisiert. Möchtest du eine Regel erstellen?</p>
+    <p style="color:var(--text3);font-size:13px;margin-bottom:16px">Nur Vorschläge zu neuen Buchungen dieses Imports mit mindestens drei eindeutigen manuellen Korrekturen. Eine Regel gilt künftig überall, wo das angezeigte Muster vorkommt.</p>
     <div id="suggestions-list"></div>
     <div class="modal-footer">
       <button class="sec" onclick="document.getElementById('suggestions-modal').classList.remove('open')">Schließen</button>
@@ -1236,6 +1278,7 @@ let txPage_ = 1, txPages_ = 1;
 let txSort_ = 'date', txDir_ = 'desc';
 let categories = [], months = [];
 let selectedIds = new Set();
+let txById_ = new Map(), splitTx_ = null;
 
 const COLORS = [
   '#2563EB','#7C3AED','#0D9488','#F97316','#EF4444',
@@ -1948,6 +1991,7 @@ async function loadTx() {
   updateSortHeaders();
 
   const data = await api(url);
+  txById_ = new Map(data.transactions.map(t => [t.id, t]));
   txPages_ = Math.ceil(data.total/data.page_size)||1;
   document.getElementById('tx-info').textContent = `${data.total} Einträge · Seite ${data.page}/${txPages_}`;
   const sumEl = document.getElementById('tx-sum');
@@ -1967,18 +2011,129 @@ async function loadTx() {
       </td>
       <td>
         <div style="font-weight:500">${esc(t.merchant_name||t.description?.slice(0,60)||'—')}${
-          t.is_outlier?`<span class="badge-out" title="Ungewöhnlich hoch für ${esc(t.category)} – Schwelle ${fmt(t.outlier_threshold)}">Ausreißer</span>`:''}</div>
+          t.is_outlier?`<span class="badge-out" title="Ungewöhnlich hoch für ${esc(t.outlier_category)} – Schwelle ${fmt(t.outlier_threshold)}">Ausreißer</span>`:''}${
+          t.booked === 0 ? '<span class="badge-pending" title="Reserviert Budget; zählt nach Bestätigung auch in der Statistik.">Vorgemerkt</span>' : ''}</div>
         ${t.merchant_name?`<div style="color:var(--text2);font-size:11.5px">${esc(t.description?.slice(0,70)||'')}</div>`:''}
         ${t.note?`<div style="color:var(--lime);font-size:11px;margin-top:2px">📝 ${esc(t.note)}</div>`:''}
+        ${t.splits.length?`<div class="split-parts">${t.splits.map(s=>`${esc(s.category)} ${fmt(Math.abs(s.amount))}`).join(' · ')}</div>`:''}
       </td>
-      <td><select class="cat-sel" onchange="updateCat(${t.id},this.value)">${categories.map(c=>`<option${c===t.category?' selected':''}>${c}</option>`).join('')}</select></td>
+      <td>${t.splits.length?'<span class="chip chip-std">Aufgeteilt</span>':`<select class="cat-sel" onchange="updateCat(${t.id},this.value)">${categories.map(c=>`<option${c===t.category?' selected':''}>${esc(c)}</option>`).join('')}</select>`}</td>
       <td style="color:var(--text3);font-size:12.5px">${t.source}</td>
       <td style="text-align:right;white-space:nowrap" class="${t.amount<0?'amount-neg':'amount-pos'}">${fmt(t.amount)}</td>
       <td style="white-space:nowrap">
+        ${t.booked === 0 ? `<button class="sec" style="padding:3px 9px;font-size:11px" onclick="confirmBooking(${t.id})">Als gebucht bestätigen</button>` : ''}
+        <button class="sec" style="padding:3px 9px;font-size:11px" onclick="openSplitModal(${t.id})">${t.splits.length?'Bearbeiten':'Aufteilen'}</button>
         <button class="note-btn${t.note?' has-note':''}" data-note="${esc(t.note||'')}" onclick="editNote(${t.id},this)" title="Notiz">📝</button>
         <button class="danger" style="padding:3px 9px;font-size:11px" onclick="delTx(${t.id},this)">✕</button>
       </td>
     </tr>`).join('');
+}
+
+async function confirmBooking(id) {
+  try {
+    await api(`/api/transactions/${id}/confirm-booking`, {method:'POST'});
+    await loadTx();
+  } catch(e) { alert(e.message); }
+}
+
+function openSplitModal(id) {
+  splitTx_ = txById_.get(id);
+  if (!splitTx_) return;
+  const cents = Math.round(Math.abs(splitTx_.amount) * 100);
+  if (cents < 2 && !splitTx_.splits.length) {
+    alert('Buchungen unter 0,02 € lassen sich nicht in zwei positive Teilbeträge aufteilen.');
+    return;
+  }
+  document.getElementById('split-summary').textContent =
+    `${splitTx_.merchant_name || splitTx_.description || 'Buchung'} · ${splitTx_.date}`;
+  document.getElementById('split-original').textContent = fmt(Math.abs(splitTx_.amount));
+  document.getElementById('split-remove').style.display = splitTx_.splits.length ? '' : 'none';
+  document.getElementById('split-msg').style.display = 'none';
+  document.getElementById('split-rows').replaceChildren();
+  if (splitTx_.splits.length) {
+    splitTx_.splits.forEach(part => addSplitRow({category:part.category, amount:Math.abs(part.amount)}));
+  } else {
+    const other = splitTx_.category === 'Sonstiges' ? 'Lebensmittel' : 'Sonstiges';
+    const first = Math.floor(cents / 2);
+    addSplitRow({category:splitTx_.category, amount:first / 100});
+    addSplitRow({category:other, amount:(cents - first) / 100});
+  }
+  updateSplitTotal();
+  document.getElementById('split-modal').classList.add('open');
+}
+
+function closeSplitModal() {
+  document.getElementById('split-modal').classList.remove('open');
+  splitTx_ = null;
+}
+
+function addSplitRow(part={}) {
+  const container = document.getElementById('split-rows');
+  if (container.children.length >= 20) return;
+  const row = document.createElement('div'); row.className = 'split-row';
+  const select = document.createElement('select'); select.setAttribute('aria-label', 'Teilkategorie');
+  categories.forEach(c => select.add(new Option(c, c)));
+  const used = new Set([...container.querySelectorAll('select')].map(s => s.value));
+  select.value = part.category || categories.find(c => !used.has(c)) || categories[0];
+  select.addEventListener('change', updateSplitTotal);
+  const input = document.createElement('input');
+  input.type = 'number'; input.min = '0.01'; input.step = '0.01'; input.placeholder = '0,00';
+  input.setAttribute('aria-label', 'Teilbetrag in Euro');
+  if (part.amount !== undefined) input.value = Number(part.amount).toFixed(2);
+  input.addEventListener('input', updateSplitTotal);
+  const remove = document.createElement('button'); remove.className = 'danger';
+  remove.type = 'button'; remove.textContent = '✕'; remove.setAttribute('aria-label', 'Teilbetrag entfernen');
+  remove.addEventListener('click', () => { row.remove(); updateSplitTotal(); });
+  row.append(select, input, remove);
+  container.appendChild(row);
+  updateSplitTotal();
+}
+
+function updateSplitTotal() {
+  if (!splitTx_) return;
+  const total = [...document.querySelectorAll('#split-rows input')]
+    .reduce((sum, input) => sum + Math.round((Number(input.value) || 0) * 100), 0);
+  const original = Math.round(Math.abs(splitTx_.amount) * 100);
+  document.getElementById('split-total').textContent = fmt(total / 100);
+  const remaining = original - total;
+  const rest = document.getElementById('split-remaining');
+  rest.textContent = fmt(remaining / 100);
+  rest.style.color = remaining === 0 ? 'var(--teal)' : 'var(--red)';
+}
+
+async function saveSplits() {
+  if (!splitTx_) return;
+  const msg = document.getElementById('split-msg');
+  const rows = [...document.querySelectorAll('#split-rows .split-row')];
+  const splits = rows.map(row => {
+    const value = Number(row.querySelector('input').value);
+    return {category:row.querySelector('select').value, amount:value};
+  });
+  const cents = splits.map(s => Math.round(s.amount * 100));
+  if (splits.length < 2 || splits.length > 20 || new Set(splits.map(s => s.category)).size !== splits.length ||
+      cents.some((c,i) => !Number.isFinite(splits[i].amount) || c <= 0 || Math.abs(c/100 - splits[i].amount) > 1e-8) ||
+      cents.reduce((a,b) => a+b, 0) !== Math.round(Math.abs(splitTx_.amount) * 100)) {
+    showMsg(msg, 'err', 'Mindestens zwei verschiedene Kategorien mit positiven Beträgen angeben; die Summe muss genau dem Originalbetrag entsprechen.');
+    return;
+  }
+  try {
+    await api(`/api/transactions/${splitTx_.id}/splits`, {method:'PUT',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({splits:splits.map((s,i) => ({category:s.category,amount:cents[i]/100}))})});
+    closeSplitModal();
+    loadTx();
+  } catch(e) { showMsg(msg, 'err', e.message); }
+}
+
+async function removeSplits() {
+  if (!splitTx_ || !confirm('Aufteilung entfernen? Die Buchung verwendet danach wieder ihre ursprüngliche Kategorie.')) return;
+  const msg = document.getElementById('split-msg');
+  try {
+    await api(`/api/transactions/${splitTx_.id}/splits`, {method:'PUT',
+      headers:{'Content-Type':'application/json'}, body:JSON.stringify({splits:[]})});
+    closeSplitModal();
+    loadTx();
+  } catch(e) { showMsg(msg, 'err', e.message); }
 }
 
 function txPage(d) { txPage_=Math.max(1,Math.min(txPages_,txPage_+d)); loadTx(); }
@@ -1999,8 +2154,10 @@ function clearSel() {
 async function applyBatch() {
   const cat = document.getElementById('batch-cat').value;
   if (!cat||!selectedIds.size) return;
-  await api('/api/transactions/batch-category',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids:[...selectedIds],category:cat})});
-  clearSel(); loadTx();
+  try {
+    await api('/api/transactions/batch-category',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ids:[...selectedIds],category:cat})});
+    clearSel(); loadTx();
+  } catch(e) { alert('Kategorie konnte nicht gesetzt werden: '+e.message); }
 }
 async function deleteBatch() {
   if (!selectedIds.size) return;
@@ -2018,7 +2175,10 @@ function editDate(id,span) {
   span.replaceWith(inp); inp.focus();
   async function save() {
     const d=inp.value;
-    if (d&&d!==cur) await fetch(`/api/transactions/${id}/date`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({date:d})});
+    if (d&&d!==cur) {
+      await api(`/api/transactions/${id}/date`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({date:d})});
+      if (txById_.has(id)) txById_.get(id).date = d;
+    }
     const s=document.createElement('span'); s.className='ds';
     s.style.cssText='cursor:pointer;border-bottom:1px dashed var(--border)';
     s.textContent=d||cur; s.onclick=()=>editDate(id,s); inp.replaceWith(s);
@@ -2045,12 +2205,13 @@ async function saveNote() {
   loadTx();
 }
 async function updateCat(id,cat) {
-  await fetch(`/api/transactions/${id}/category`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({category:cat})});
+  await api(`/api/transactions/${id}/category`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({category:cat})});
+  loadTx();
 }
 async function delTx(id,btn) {
   if (!confirm('Transaktion löschen?')) return;
-  await fetch(`/api/transactions/${id}`,{method:'DELETE'});
-  btn.closest('tr').remove();
+  await api(`/api/transactions/${id}`,{method:'DELETE'});
+  loadTx();
 }
 
 // ── Stats ──────────────────────────────────────────────────────────────────────
@@ -2195,6 +2356,31 @@ async function loadComparison() {
      'current');
 }
 
+function recurringAction(item) {
+  const key = encodeURIComponent(JSON.stringify({
+    source: item.source, account_name: item.account_name,
+    merchant_name: item.merchant_name, category: item.category
+  }));
+  return `<button class="sec recurring-action" data-recurring-key="${key}" data-excluded="${!item.excluded}"
+    onclick="setRecurringExcluded(this)" title="Gilt für diesen Händler, diese Kategorie und dieses Konto">${item.excluded ? 'Wieder berücksichtigen' : 'Nicht mehr wiederkehrend'}</button>`;
+}
+
+async function setRecurringExcluded(button) {
+  button.disabled = true;
+  try {
+    const key = JSON.parse(decodeURIComponent(button.dataset.recurringKey));
+    await api('/api/recurring/exclusion', {
+      method: 'PUT', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({...key, excluded: button.dataset.excluded === 'true'})
+    });
+    await Promise.all([loadRecurring(), loadDashboard()]);
+  } catch (e) {
+    alert('Wiederkehrende Buchung konnte nicht aktualisiert werden: ' + e.message);
+  } finally {
+    button.disabled = false;
+  }
+}
+
 function renderUpcoming(id, data, days, limit, includeIncome) {
   const target = document.getElementById(id);
   const items = data.items.filter(r => r.days_until <= days && (includeIncome || r.kind !== 'income')).slice(0, limit);
@@ -2213,7 +2399,7 @@ function renderUpcoming(id, data, days, limit, includeIncome) {
       <div class="upcoming-date">${when}${soon ? `<div class="upcoming-soon">${soon}</div>` : ''}</div>
       <div><div class="upcoming-name">${esc(r.merchant_name)}</div>
         <div class="upcoming-meta">${esc(r.category)} · ${esc(r.account_name)} · ${type}</div>${change}</div>
-      <div class="upcoming-amount" style="color:${r.kind==='income'?'var(--teal)':'var(--text)'}">${r.kind==='income'?'+':'−'} ca. ${fmt(r.amount)}</div>
+      <div class="upcoming-amount" style="color:${r.kind==='income'?'var(--teal)':'var(--text)'}">${r.kind==='income'?'+':'−'} ca. ${fmt(r.amount)}<div>${recurringAction(r)}</div></div>
     </div>`;
   }).join('') : '<div class="upcoming-empty">Keine erkannten festen Buchungen in diesem Zeitraum.</div>';
 }
@@ -2231,7 +2417,11 @@ async function loadRecurring() {
   document.getElementById('abo-inc').textContent = data.price_increases;
 
   // Preisänderung als Zahl mitführen, damit die Spalte sortierbar ist.
-  const items = data.items.map(r => ({...r, price_pct: r.price_change ? r.price_change.pct : null}));
+  const excludedCount = data.items.filter(r => r.excluded).length;
+  document.getElementById('abo-excluded-label').textContent = `Ausgeschlossene anzeigen (${excludedCount})`;
+  const showExcluded = document.getElementById('abo-show-excluded').checked;
+  const items = data.items.filter(r => showExcluded || !r.excluded)
+    .map(r => ({...r, price_pct: r.price_change ? r.price_change.pct : null}));
   sortableTable('abo-body', items, r => {
     const pc = r.price_change;
     const pcTxt = pc
@@ -2245,16 +2435,17 @@ async function loadRecurring() {
       ${r.type_overridden ? `<button class="linklike" style="margin-left:4px;font-size:11px;color:var(--text3);cursor:pointer;background:none;border:none"
             title="Automatische Erkennung wiederherstellen" onclick="resetRecurringType('${mEsc}','${cEsc}',event)">↺</button>` : ''}`;
     return `<tr>
-      <td>${esc(r.merchant_name)}${r.kind==='savings'?'<span class="chip chip-std" style="margin-left:6px">Sparplan</span>':r.kind==='income'?'<span class="chip chip-std" style="margin-left:6px">Einnahme</span>':''}</td>
+      <td>${esc(r.merchant_name)}<div class="upcoming-meta">${esc(r.account_name)} · ${esc(r.source)}</div>${r.kind==='savings'?'<span class="chip chip-std" style="margin-left:6px">Sparplan</span>':r.kind==='income'?'<span class="chip chip-std" style="margin-left:6px">Einnahme</span>':''}</td>
       <td style="color:var(--text3)">${esc(r.category)}</td>
       <td>${typeCell}</td>
       <td style="text-align:right;color:var(--red)">${fmt(r.median_amount)}</td>
       <td style="text-align:right">${fmt(r.monthly_cost)}</td>
       <td style="text-align:right;font-weight:600">${fmt(r.yearly_cost)}</td>
-      <td style="color:var(--text3);white-space:nowrap">${!r.active ? "Inaktiv / Daten prüfen" : r.interval_months ? r.next_expected + " · alle " + r.interval_months + " Mon." : "Unregelmäßig"}</td>
+      <td style="color:var(--text3);white-space:nowrap">${r.excluded ? "Manuell ausgeschlossen" : !r.active ? "Inaktiv / Daten prüfen" : r.interval_months ? r.next_expected + " · alle " + r.interval_months + " Mon." : "Unregelmäßig"}</td>
       <td style="white-space:nowrap">${pcTxt}</td>
+      <td>${recurringAction(r)}</td>
     </tr>`;
-  }, '<tr><td colspan="8" style="color:var(--text2);text-align:center;padding:20px">Keine wiederkehrenden Buchungen</td></tr>',
+  }, '<tr><td colspan="9" style="color:var(--text2);text-align:center;padding:20px">Keine wiederkehrenden Buchungen</td></tr>',
      'yearly_cost');
 }
 
@@ -2555,13 +2746,16 @@ async function uploadUnified(inp) {
   const src  = document.getElementById('import-source').value;
   const msg  = document.getElementById('msg-unified');
   msg.style.display = 'none';
+  importSuggestions = [];
+  updateSuggestionsButton();
   const bank = src === 'hanseaticbank' ? 'hanseaticbank' : 'comdirect';
   const fd   = new FormData(); fd.append('file', file);
   try {
     const d = await api(`/api/import/${bank}`, {method:'POST', body:fd});
     showMsg(msg, 'ok', `✓ ${d.inserted} importiert, ${d.skipped_duplicates} Duplikate, ${d.reconciled || 0} Vormerkungen abgeglichen. ${d.statement?.balance_verified ? 'Saldo geprüft. ' : ''}${d.unclassified || 0} Kategorien ungeklärt. ${(d.warnings || []).join(' ')}`);
     await refreshMonths();
-    if (d.inserted > 0) checkSuggestions();
+    importSuggestions = d.suggestions || [];
+    updateSuggestionsButton();
   } catch(e) { showMsg(msg, 'err', '✗ '+e.message); }
   inp.value = '';
 }
@@ -2644,19 +2838,23 @@ async function loadBudget() {
   const withB = data.categories.filter(c => c.budget !== null);
   const withoutB = data.categories.filter(c => c.budget === null);
   const totalBudget = withB.reduce((s,c) => s+c.budget, 0);
-  const totalSpent  = withB.reduce((s,c) => s+c.spent,  0);
+  const totalSpent  = withB.reduce((s,c) => s+c.used,  0);
+  const totalPending = withB.reduce((s,c) => s+c.pending, 0);
   const overCount   = withB.filter(c => c.pct > 100).length;
   const overColor   = overCount > 0 ? 'red' : 'lime';
 
   document.getElementById('budget-kpis').innerHTML = `
     <div style="grid-column:1/-1;color:var(--text2);font-size:12px">${esc((data.data_quality?.warnings || []).join(" "))}</div>
     <div class="kpi"><div class="kpi-icon blue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 8.5a5 5 0 1 0 0 7"/><line x1="5" y1="10" x2="14" y2="10"/><line x1="5" y1="14" x2="12" y2="14"/></svg></div><div class="kpi-label">Gesamtbudget</div><div class="kpi-value blue">${fmt(totalBudget)}</div><div class="kpi-sub">${data.period.label}${data.months>1?" ("+data.months+" Monate)":""}</div></div>
-    <div class="kpi"><div class="kpi-icon red"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 7 10 13 14 9 20 17"/><polyline points="14 17 20 17 20 11"/></svg></div><div class="kpi-label">Ausgegeben</div><div class="kpi-value red">${fmt(totalSpent)}</div><div class="kpi-sub">${totalBudget>0?((totalSpent/totalBudget)*100).toFixed(0)+' %':'—'}</div></div>
+    <div class="kpi"><div class="kpi-icon red"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 7 10 13 14 9 20 17"/><polyline points="14 17 20 17 20 11"/></svg></div><div class="kpi-label">Budget belegt</div><div class="kpi-value red">${fmt(totalSpent)}</div><div class="kpi-sub">${totalBudget>0?((totalSpent/totalBudget)*100).toFixed(0)+' %':'—'} · davon ${fmt(totalPending)} vorgemerkt</div></div>
     <div class="kpi"><div class="kpi-icon ${overColor}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 2 20h20L12 3Z"/><line x1="12" y1="10" x2="12" y2="14"/><circle cx="12" cy="17" r="0.6" fill="currentColor" stroke="none"/></svg></div><div class="kpi-label">Überschritten</div><div class="kpi-value ${overColor}">${overCount}</div><div class="kpi-sub">Kategorie${overCount!==1?'n':''}</div></div>`;
 
   const renderItem = (c, hasExisting) => {
     const pct    = hasExisting ? Math.min(c.pct, 100) : 0;
     const color  = c.pct > 100 ? 'var(--red)' : c.pct > 80 ? 'var(--orange)' : 'var(--lime)';
+    const spendingLabel = c.pending > 0
+      ? `${fmt(c.used)} belegt · ${fmt(c.spent)} gebucht + ${fmt(c.pending)} vorgemerkt`
+      : `${fmt(c.spent)} ausgegeben`;
     const catEsc = esc(c.category).replace(/'/g,"\\'");
     // Hochrechnung nur, wenn der gewählte Monat gerade läuft (dann liefert
     // die API einen Wert; bei abgeschlossenen Monaten ist sie null).
@@ -2676,13 +2874,13 @@ async function loadBudget() {
         <div class="budget-item-bar">
           ${hasExisting ? `
             <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text2);margin-bottom:5px">
-              <span>${fmt(c.spent)} ausgegeben</span>
+              <span>${spendingLabel}</span>
               <span style="color:${color}">${c.pct.toFixed(0)} %</span>
             </div>
             <div class="budget-track"><div class="budget-fill" style="width:${pct}%;background:${color}"></div></div>
             <div style="font-size:11px;color:var(--text2);margin-top:4px">von ${fmt(c.budget)}</div>
             ${forecastHtml}
-          ` : `<div style="font-size:12px;color:var(--text3)">${fmt(c.spent)} ausgegeben · kein Budget gesetzt</div>${forecastHtml}`}
+          ` : `<div style="font-size:12px;color:var(--text3)">${spendingLabel} · kein Budget gesetzt</div>${forecastHtml}`}
         </div>
         <div class="budget-item-controls">
           <input type="number" class="budget-inp" value="${hasExisting ? c.budget : ''}" placeholder="Betrag" step="10" min="0">
@@ -2724,33 +2922,56 @@ async function deleteBudget(category, btn) {
 }
 
 // ── Suggestions ────────────────────────────────────────────────────────────────
-async function checkSuggestions() {
-  try {
-    const suggestions = await api('/api/import/suggestions');
-    if (!suggestions.length) return;
-    document.getElementById('suggestions-list').innerHTML = suggestions.map(s => {
-      const mEsc = esc(s.merchant_name).replace(/'/g,"\\'");
-      const cEsc = esc(s.suggested_category).replace(/'/g,"\\'");
-      return `<div class="suggestion-item">
-        <div style="flex:1">
-          <div style="font-weight:600">${esc(s.merchant_name)}</div>
-          <div style="font-size:12px;color:var(--text3)">${s.count}× als <strong style="color:var(--lime)">${esc(s.suggested_category)}</strong> kategorisiert</div>
-        </div>
-        <button onclick="createRuleFromSuggestion('${mEsc}','${cEsc}',this)" style="padding:6px 14px;font-size:12px">Regel erstellen</button>
-      </div>`;
-    }).join('');
-    document.getElementById('suggestions-modal').classList.add('open');
-  } catch(e) { /* silent */ }
+let importSuggestions = [];
+
+function updateSuggestionsButton() {
+  const count = importSuggestions.filter(Boolean).length;
+  const button = document.getElementById('suggestions-review');
+  button.style.display = count ? '' : 'none';
+  button.textContent = `${count} Regelvorschlag${count === 1 ? '' : 'e'} prüfen`;
+  if (!count) document.getElementById('suggestions-modal').classList.remove('open');
 }
 
-async function createRuleFromSuggestion(merchant, category, btn) {
-  const pattern = merchant.toLowerCase().slice(0, 40);
+function checkSuggestions() {
+  document.getElementById('suggestions-list').innerHTML = importSuggestions.map((s,i) => {
+    if (!s) return '';
+    return `<div class="suggestion-item" style="flex-wrap:wrap">
+      <div style="flex:1;min-width:180px">
+        <div style="font-weight:600">${esc(s.merchant_name)}</div>
+        <div style="font-size:12px;color:var(--text3)">${s.count} verschiedene Buchungen manuell als <strong style="color:var(--lime)">${esc(s.suggested_category)}</strong> kategorisiert</div>
+        <div style="font-size:12px;color:var(--text3)">Muster: ${esc(s.pattern)}</div>
+      </div>
+      <button onclick="createRuleFromSuggestion(${i},this)" style="padding:6px 14px;font-size:12px">Regel erstellen</button>
+      <button class="sec" onclick="dismissSuggestion(${i},this)" style="padding:6px 14px;font-size:12px">Nicht mehr vorschlagen</button>
+    </div>`;
+  }).join('');
+  if (importSuggestions.some(Boolean)) document.getElementById('suggestions-modal').classList.add('open');
+}
+
+async function createRuleFromSuggestion(index, btn) {
+  const suggestion = importSuggestions[index];
+  if (!suggestion) return;
+  btn.disabled = true;
   try {
-    await api('/api/rules', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({pattern, category})});
-    btn.textContent = '✓ Erstellt';
-    btn.disabled = true;
-    btn.style.cssText += ';background:rgba(200,245,74,.15);color:var(--lime);border:1px solid rgba(200,245,74,.3)';
-  } catch(e) { btn.textContent = '✗ Fehler'; }
+    await api('/api/rules', {method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({pattern:suggestion.pattern, category:suggestion.suggested_category})});
+    importSuggestions[index] = null;
+    btn.closest('.suggestion-item').remove();
+    updateSuggestionsButton();
+  } catch(e) { btn.disabled = false; alert(e.message); }
+}
+
+async function dismissSuggestion(index, btn) {
+  const suggestion = importSuggestions[index];
+  if (!suggestion) return;
+  btn.disabled = true;
+  try {
+    await api('/api/import/suggestions/dismiss', {method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({merchant_name:suggestion.merchant_name, category:suggestion.suggested_category})});
+    importSuggestions[index] = null;
+    btn.closest('.suggestion-item').remove();
+    updateSuggestionsButton();
+  } catch(e) { btn.disabled = false; alert(e.message); }
 }
 
 // ── Utils ──────────────────────────────────────────────────────────────────────

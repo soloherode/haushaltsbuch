@@ -4,6 +4,10 @@ HanseaticBank categories are used as the base; comdirect transactions
 are mapped to the same set via keyword rules.
 """
 
+import re
+import unicodedata
+
+
 CATEGORIES = [
     "Einkommen",
     "Lebensmittel",
@@ -111,7 +115,7 @@ COMDIRECT_KEYWORD_RULES = [
     ("arzt",                "Gesundheit"),
     ("krankenversicherung", "Gesundheit"),
     ("ergo kranken",        "Gesundheit"),
-    ("musikschule",         "Gesundheit"),  # child activities
+    ("musikschule",         "Kinder"),
 
     # Unterhaltung
     ("netflix",             "Unterhaltung"),
@@ -128,23 +132,20 @@ COMDIRECT_KEYWORD_RULES = [
     ("versicherung",        "Finanzen & Versicherung"),
     ("hanseatic bank",      "Finanzen & Versicherung"),
     ("kartenabrechnung",    "Finanzen & Versicherung"),
-    ("visa",                "Finanzen & Versicherung"),
     ("kontoabschluss",      "Finanzen & Versicherung"),
     ("entgelt",             "Finanzen & Versicherung"),
     ("kontoführungsentgelt","Finanzen & Versicherung"),
 
     # Einkaufen
     ("amazon",              "Einkaufen"),
-    ("h&m",                 "Einkaufen"),
-    ("zara",                "Einkaufen"),
+    ("h&m",                 "Kleidung"),
+    ("zara",                "Kleidung"),
     ("obi ",                "Einkaufen"),
     ("bauhaus",             "Einkaufen"),
     ("ikea",                "Einkaufen"),
-    ("zalando",             "Einkaufen"),
+    ("zalando",             "Kleidung"),
     ("ebay",                "Einkaufen"),
     ("aliexpress",          "Einkaufen"),
-    ("riverty",             "Einkaufen"),
-    ("paypal",              "Einkaufen"),
 
     # Telekommunikation → Wohnen
     ("telekom",             "Wohnen & Nebenkosten"),
@@ -158,10 +159,18 @@ COMDIRECT_KEYWORD_RULES = [
 ]
 
 
+def normalize_category_text(text: str | None) -> str:
+    """Normalize formatting, retaining meaningful payment text and numbers."""
+    return " ".join(unicodedata.normalize("NFKC", text or "").casefold().split())
+
+
 def categorize_from_comdirect(vorgang: str, description: str) -> str:
-    text = (vorgang + " " + description).lower()
+    text = normalize_category_text(vorgang + " " + description)
     for pattern, category in COMDIRECT_KEYWORD_RULES:
-        if pattern in text:
+        # A brand must not match inside an unrelated word or identifier:
+        # "esso" in "Espresso", "o2" in a reference, "visa" in "VisaBonus".
+        keyword = re.escape(normalize_category_text(pattern))
+        if re.search(r"(?<!\w)" + keyword + r"(?!\w)", text):
             return category
     return "Sonstiges"
 
