@@ -209,7 +209,7 @@ const Stats = (() => {
     const restoreAction=$('sx-content').contains(focused)?focused.dataset.action:null;
     destroyCharts();
     $('sx-status').innerHTML=section==='recurring'&&recurringMode==='current'?'':qualityHTML();
-    $('sx-range').textContent=rangeLabel(data.period)+(data.selection.end!==data.period.end?' · Laufender Zeitraum, bis einschließlich heute':'')+(/^r\d+$/.test(currentPeriod)?' · Ende am neuesten Datenmonat':'')+(months[0]&&months[0]<data.today.slice(0,7)?' · Neuester Datenmonat: '+months[0]:'');
+    $('sx-range').textContent=rangeLabel(data.period)+(data.selection.end!==data.period.end?' · bis heute':'')+(/^r\d+$/.test(currentPeriod)?' · Ende am neuesten Datenmonat':'')+(months[0]&&months[0]<data.today.slice(0,7)?' · Neuester Datenmonat: '+months[0]:'');
     $('sx-excluded').textContent=data.excluded_count?`${data.excluded_count} Kategorie-Buchungen · ${money(data.excluded_total)} ausgeblendet`:'';
     $('sx-content').removeAttribute('aria-busy');
     if(section==='overview') renderOverview();
@@ -226,11 +226,12 @@ const Stats = (() => {
     const groups=periodGroups(months), pick={month:'Monate',quarter:'Quartale',year:'Jahre'}[kind];
     let options=pick?(groups.find(([label])=>label===pick)?.[1]||[]):[['r3','Letzte 3 Monate'],['r6','Letzte 6 Monate'],['r12','Letzte 12 Monate'],['all','Alle Daten'],['custom','Von–Bis']];
     if(pick&&!options.some(([v])=>v===value)) options=[[value,value],...options];
+    if(kind==='month'&&matchMedia('(max-width:700px)').matches) options=options.map(([v,label])=>[v,/^\d{4}-\d{2}$/.test(v)?new Intl.DateTimeFormat('de-DE',{month:'short',year:'numeric'}).format(new Date(v+'-01T12:00:00')):label]);
     $('sx-value').innerHTML=options.map(([v,label])=>`<option value="${v}">${safe(label)}</option>`).join('');
     $('sx-value').value=value.includes('..')?'custom':value;
     $('sx-custom').hidden=!value.includes('..');
     if(value.includes('..')) [$('sx-from').value,$('sx-to').value]=value.split('..');
-    $('sx-prev').disabled=kind==='range'; $('sx-next').disabled=kind==='range';
+    $('sx-prev').hidden=kind==='range'; $('sx-next').hidden=kind==='range';
   }
   function applyPeriod(value) {
     const sel=$('stats-period');
@@ -298,7 +299,6 @@ const Stats = (() => {
   }
   function init() {
     syncControls();
-    window.addEventListener('scroll',()=>document.querySelector('#page-stats .sx-controls').classList.toggle('sx-compact',window.scrollY>250),{passive:true});
     $('sx-prev').addEventListener('click',()=>stepPeriod(-1)); $('sx-next').addEventListener('click',()=>stepPeriod(1));
     $('sx-kind').addEventListener('change',()=>{
       const kind=$('sx-kind').value, selected=periodOf('stats-period'), latest=months[0]||new Date().toISOString().slice(0,7);
