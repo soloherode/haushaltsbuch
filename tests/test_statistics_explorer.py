@@ -105,6 +105,10 @@ class StatisticsExplorerTests(unittest.TestCase):
         self.assertEqual(v['expense_structure'],{'fixed':100,'variable':40})
         self.assertEqual(v['necessity'],{'essential':100,'discretionary':40})
         self.assertEqual(v['expense_structure_monthly'][0]['fixed'],100)
+        average=self.view('2026-06-01..2026-08-31')['expense_monthly_average']
+        self.assertEqual(average,{'months':3,'partial':False,'fixed':100,'variable':13.33,
+                                  'essential':100,'discretionary':13.33})
+        self.assertTrue(self.view('2026-06-01..2026-08-15')['expense_monthly_average']['partial'])
         self.conn.execute("INSERT INTO merchant_overrides (merchant_name,category,recurring_type) VALUES ('Miete','Wohnen & Nebenkosten','variabel')")
         self.conn.commit()
         self.assertEqual(self.view()['expense_structure'],{'fixed':0,'variable':140})
@@ -117,6 +121,7 @@ class StatisticsExplorerTests(unittest.TestCase):
         self.assertIsNone(v['monthly'][1]['consumption'])
         self.assertIsNone(v['monthly'][1]['cumulative'])
         self.assertEqual(v['expense_structure_monthly'][1],{'label':'2026-07','fixed':None,'variable':None})
+        self.assertIsNone(v['expense_monthly_average'])
         self.assertIsNone(v['summary']['savings_rate'])
         self.assertIsNone(v['monthly'][0]['savings_rate'])
         self.assertEqual(v['monthly'][2]['cumulative'],0)

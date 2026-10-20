@@ -155,6 +155,18 @@ def build(conn, p, *, exclude_outliers=False, category=None, today=None, include
     structure = expense_structure(active)
     structure_monthly = [{'label': m['label'], **(expense_structure(month_groups.get(m['label'], []))
                          if m['consumption'] is not None else {'fixed': None, 'variable': None})} for m in monthly]
+    observed_months = [i for i, m in enumerate(monthly) if m['consumption'] is not None]
+    expense_monthly_average = None
+    if len(observed_months) >= 3:
+        count = len(observed_months)
+        expense_monthly_average = {'months': count,
+            'partial': bool(current.bounded and
+                            (date.fromisoformat(current.start).day != 1 or
+                             date.fromisoformat(current.end).day != 1)),
+            **{key: round(sum(values[i][key] for i in observed_months) / count, 2)
+               for values, keys in ((structure_monthly, ('fixed', 'variable')),
+                                    (necessity_monthly, ('essential', 'discretionary')))
+               for key in keys}}
     outliers = [{**r, 'threshold': thresholds[r['category']],
                  'factor': round(abs(r['amount']) / thresholds[r['category']], 1)} for r in selected if r['outlier']]
     outliers.sort(key=lambda r: abs(r['amount']), reverse=True)
@@ -183,6 +195,7 @@ def build(conn, p, *, exclude_outliers=False, category=None, today=None, include
             'granularity': 'day' if single_month else 'month', 'monthly': monthly, 'quarterly': quarterly,
             'categories': categories, 'necessity': necessity, 'necessity_monthly': necessity_monthly,
             'expense_structure': structure, 'expense_structure_monthly': structure_monthly,
+            'expense_monthly_average': expense_monthly_average,
             'income_categories': [{'category': k, 'total': round(sum(r['amount'] for r in rr), 2)}
                 for k, rr in grouped([r for r in active if r['kind']=='income'], lambda r:r['category']).items()],
             'outliers': outliers, 'excluded_count': len(outliers) if exclude_outliers else 0,
