@@ -13,7 +13,7 @@ const Stats = (() => {
   const categoryColor = name => colors[[...name].reduce((a,c)=>a+c.charCodeAt(0),0)%colors.length];
   let section='overview', perspective='categories', data=null, recurring=null, upcoming=null;
   let sequence=0, detailSequence=0, allCategories=false, allUpcoming=false, days=30, recurringMode='current', showExcluded=false;
-  let trigger=null, currentCategory=null, compare=true, aggregation='month';
+  let trigger=null, currentCategory=null, compare=true, aggregation='month', overviewScale='detail';
   const charts = new Map();
   const changed = value => value===0 ? 'Unverändert' : `${money(Math.abs(value))} ${value>0?'mehr':'weniger'}`;
   const empty = text => `<p class="sx-empty">${text}</p>`;
@@ -51,7 +51,7 @@ const Stats = (() => {
         const count=dataset.data.filter(v=>v!=null&&Number.isFinite(v)).length;
         if(isLine&&count>8) return;
         meta.data.forEach((element,i)=>{
-          const value=dataset.data[i];
+          const value=dataset.rawValues?.[i] ?? dataset.data[i];
           if(value==null||!Number.isFinite(value)||(!isLine&&value===0)) return;
           const label=chartValue(value,options.percentage), width=ctx.measureText(label).width+padding*2;
           const base=element.base??element.y;
@@ -87,16 +87,18 @@ const Stats = (() => {
       ctx.restore();
     }
   };
-  function draw(id,labels,datasets,{type='bar',percentage=false,horizontal=false,stacked=false}={}) {
+  const detailScale = value => Math.asinh(value/200);
+  const detailScaleInverse = value => Math.sinh(value)*200;
+  function draw(id,labels,datasets,{type='bar',percentage=false,horizontal=false,stacked=false,compressed=false,showValues=true}={}) {
     const el=$(id); if(!el) return;
     charts.get(id)?.destroy();
     const plot=el.parentElement;
     plot.style.minWidth=horizontal||type==='line'&&labels.length<=8?'0':`${Math.max(0,labels.length*52+80)}px`;
     if(horizontal) plot.style.height=Math.max(250,labels.length*32+85)+'px';
-    const axis={beginAtZero:true,grace:'15%',ticks:{color:'#64748b',font:{family:'Inter',size:11},callback:v=>number(v)+(percentage?' %':' €')},grid:{color:'rgba(148,163,184,.15)'}};
+    const axis={beginAtZero:true,grace:'15%',ticks:{color:'#64748b',font:{family:'Inter',size:11},callback:v=>compressed?new Intl.NumberFormat('de-DE',{maximumSignificantDigits:2}).format(detailScaleInverse(v))+' €':number(v)+(percentage?' %':' €')},grid:{color:'rgba(148,163,184,.15)'}};
     const categoryAxis={ticks:{color:'#64748b',font:{family:'Inter',size:11},maxRotation:0,autoSkip:true,maxTicksLimit:12},grid:{display:false}};
-    charts.set(id,new Chart(el,{type,plugins:[directValues],data:{labels,datasets:datasets.map(d=>({borderWidth:2,borderRadius:4,pointRadius:3,tension:0,spanGaps:false,...d}))},options:{responsive:true,maintainAspectRatio:false,animation:false,indexAxis:horizontal?'y':'x',layout:{padding:{top:34,right:horizontal?65:12,left:horizontal?12:12,bottom:12}},
-      plugins:{statisticsValues:{percentage,stacked},legend:{position:'bottom',labels:{color:'#475569',boxWidth:12,font:{family:'Inter',size:11}}},tooltip:{callbacks:{label:c=>`${c.dataset.label}: ${percentage?percent(horizontal?c.parsed.x:c.parsed.y):money(horizontal?c.parsed.x:c.parsed.y)}`}}},
+    charts.set(id,new Chart(el,{type,plugins:[directValues],data:{labels,datasets:datasets.map(d=>({borderWidth:2,borderRadius:4,pointRadius:3,tension:0,spanGaps:false,...d,rawValues:compressed?d.data:undefined,directValues:showValues&&d.directValues!==false,data:compressed?d.data.map(v=>v==null?v:detailScale(v)):d.data}))},options:{responsive:true,maintainAspectRatio:false,animation:false,indexAxis:horizontal?'y':'x',layout:{padding:{top:34,right:horizontal?65:12,left:horizontal?12:12,bottom:12}},
+      plugins:{statisticsValues:{percentage,stacked},legend:{position:'bottom',labels:{color:'#475569',boxWidth:12,font:{family:'Inter',size:11}}},tooltip:{callbacks:{label:c=>`${c.dataset.label}: ${percentage?percent(c.dataset.rawValues?.[c.dataIndex]??(horizontal?c.parsed.x:c.parsed.y)):money(c.dataset.rawValues?.[c.dataIndex]??(horizontal?c.parsed.x:c.parsed.y))}`}}},
       scales:{x:{...(horizontal?axis:categoryAxis),stacked},y:{...(horizontal?categoryAxis:axis),stacked}}}}));
   }
   function qualityHTML() {
@@ -126,16 +128,19 @@ const Stats = (() => {
     const insights=canCompare()?[...data.categories].filter(r=>r.diff!==0).sort((a,b)=>Math.abs(b.diff)-Math.abs(a.diff)).slice(0,3):[];
     const series=aggregation==='quarter'&&data.granularity!=='day'?data.quarterly:data.series;
     const aggregationControl=data.granularity!=='day'&&data.monthly.length>3?'<label>Auflösung<select id="sx-aggregation" aria-label="Auflösung"><option value="month">Monate</option><option value="quarter">Quartale</option></select></label>':'';
-    $('sx-content').innerHTML=comparisonControl()+`<div class="sx-toolbar">${aggregationControl}</div><div class="sx-kpis">${[['Einnahmen','income'],['Ausgaben','consumption'],['Sparüberweisungen','savings'],['Verbleibender Betrag','balance']].map(([label,k])=>kpi(label,money(s[k]),prev?changed(s[k]-prev[k]):'')).join('')}</div>`+
-      card('Einnahmen, Ausgaben und Sparen',`${rangeLabel(data.period)} · ${data.granularity==='day'?'Tageswerte':aggregation==='quarter'?'Quartalswerte':'Monatswerte'}`, data.count?chartSlot('sx-overview-chart','Gebuchte Nettobeträge; Monate ohne Daten bleiben offen.',['Datum','Einnahmen','Ausgaben','Sparüberweisungen'],series.map(r=>[r.label,money(r.income),money(r.consumption),money(r.savings)])):empty('Keine Buchungen im Zeitraum.'))+
-      `<div class="sx-grid">`+card('Das hat sich verändert',data.comparison_verified?'':'Vorläufig',insights.length?insights.map(r=>`<button class="sx-insight" data-category="${key(r.category)}"><strong>${safe(r.category)}</strong><br><span class="sx-muted">${changed(r.diff)}</span></button>`).join(''):empty(canCompare()?'Keine Veränderung gegenüber dem Vorzeitraum.':'Keine Vergleichsdaten.'))+
-      card('Einnahmen im Detail','',`<details><summary>Aufschlüsselung</summary>${data.income_categories.length?data.income_categories.map(r=>`<div class="sx-row"><span>${safe(r.category)}</span><strong>${money(r.total)}</strong></div>`).join(''):empty('Keine Einnahmen gebucht.')}</details>`)+`</div>`+
-      card('Monatswerte','',`<details><summary>Monatswerte</summary>${monthlyTable()}</details>`);
+    const isDaily=data.granularity==='day', compressed=isDaily&&overviewScale==='detail';
+    const scaleControl=isDaily?`<label class="sx-scale-control">Skala <select id="sx-overview-scale" aria-label="Skala des Tagesdiagramms"><option value="detail">Details sichtbar</option><option value="linear">Linear</option></select></label>`:'';
+    $('sx-content').innerHTML=comparisonControl()+(aggregationControl?`<div class="sx-toolbar">${aggregationControl}</div>`:'')+`<div class="sx-kpis">${[['Einnahmen','income'],['Ausgaben','consumption'],['Sparüberweisungen','savings'],['Verbleibender Betrag','balance']].map(([label,k])=>kpi(label,money(s[k]),prev?changed(s[k]-prev[k]):'')).join('')}</div>`+
+      card('Einnahmen, Ausgaben und Sparen',`${rangeLabel(data.period)} · ${isDaily?'Tageswerte':aggregation==='quarter'?'Quartalswerte':'Monatswerte'}`, data.count?`${scaleControl}${compressed?'<p class="sx-scale-note">Komprimierte Euro-Skala: kleine Tageswerte werden besser sichtbar. Die Balkenhöhe ist nicht proportional zum Betrag; Tooltip und Tabelle zeigen die genauen Werte.</p>':''}${chartSlot('sx-overview-chart',`Gebuchte Nettobeträge${compressed?' auf komprimierter Euro-Skala':''}; genaue Werte in der Datentabelle.`,['Datum','Einnahmen','Ausgaben','Sparüberweisungen'],series.map(r=>[r.label,money(r.income),money(r.consumption),money(r.savings)]))}`:empty('Keine Buchungen im Zeitraum.'))+
+      `<div class="sx-grid">`+card('Das hat sich verändert',data.comparison_verified?'':'Vorläufig',insights.length?`<p class="sx-muted sx-insight-caption">Ausgaben gegenüber dem Vorzeitraum</p><div class="sx-insights">${insights.map(r=>`<button class="sx-change" data-category="${key(r.category)}" aria-label="${safe(r.category)}: ${safe(changed(r.diff))}; Kategorie öffnen"><span class="sx-change-icon ${r.diff>0?'is-up':'is-down'}" aria-hidden="true">${r.diff>0?'↑':'↓'}</span><span class="sx-change-copy"><strong>${safe(r.category)}</strong><span class="sx-muted">Kategorie ansehen</span></span><span class="sx-change-delta ${r.diff>0?'is-up':'is-down'}">${r.diff>0?'+':'−'} ${money(Math.abs(r.diff))}</span></button>`).join('')}</div>`:empty(canCompare()?'Keine Veränderung gegenüber dem Vorzeitraum.':'Keine Vergleichsdaten.'))+
+      card('Einnahmen im Detail','',data.income_categories.length?data.income_categories.map(r=>`<div class="sx-row"><span>${safe(r.category)}</span><strong>${money(r.total)}</strong></div>`).join(''):empty('Keine Einnahmen gebucht.'))+`</div>`+
+      card('Monatswerte','',monthlyTable());
     if($('sx-aggregation')) $('sx-aggregation').value=aggregation;
+    if($('sx-overview-scale')) $('sx-overview-scale').value=overviewScale;
     if(data.count) draw('sx-overview-chart',series.map(r=>data.granularity==='day'?r.label.slice(8)+'.'+r.label.slice(5,7)+'.':r.label),[
       {label:'Einnahmen',data:series.map(r=>r.income),backgroundColor:'#2563eb'},
       {label:'Ausgaben',data:series.map(r=>r.consumption),backgroundColor:'#f97316'},
-      {label:'Sparüberweisungen',data:series.map(r=>r.savings),backgroundColor:'#0d9488'}]);
+      {label:'Sparüberweisungen',data:series.map(r=>r.savings),backgroundColor:'#0d9488'}],{compressed,showValues:!isDaily||series.length<=12});
   }
   function renderExpenses() {
     const cats=data.categories.filter(r=>r.total!==0 || (canCompare()&&r.previous!==0));
@@ -163,7 +168,7 @@ const Stats = (() => {
   }
   function renderSavings() {
     const s=data.summary, pts=data.monthly;
-    $('sx-content').innerHTML=`<div class="sx-kpis">${kpi('Netto in Sparanlagen überwiesen',money(s.savings))}${kpi('Sparüberweisungsquote',percent(s.savings_rate))}${kpi('Zielquote',data.goal==null?'Kein Ziel gesetzt':percent(data.goal))}${kpi('Abstand zum Ziel',s.savings_rate==null||data.goal==null?'—':number(s.savings_rate-data.goal)+' Prozentpunkte')}</div>`+
+    $('sx-content').innerHTML=`<div class="sx-kpis">${kpi('Netto in Sparanlagen überwiesen',money(s.savings))}${kpi('Sparüberweisungsquote',percent(s.savings_rate))}${kpi('Zielquote',data.goal==null?'Kein Ziel gesetzt':percent(data.goal))}${kpi('Abstand zum Ziel',s.savings_rate==null||data.goal==null?'—':number(s.savings_rate-data.goal)+' PP')}</div>`+
       card('Sparüberweisungen pro Monat','',pts.length?chartSlot('sx-savings-month','Monatliche Netto-Sparüberweisungen.',['Monat','Sparüberweisungen'],pts.map(r=>[r.label,money(r.savings)])):empty('Keine Buchungen im Zeitraum.'))+
       card('Kumulierte Sparüberweisungen',`${data.period.start?'Ab '+dateLabel(data.period.start):'Ab erster Buchung'} · kein Vermögensstand`,pts.length>1?chartSlot('sx-savings-total','Kumulierte Netto-Sparüberweisungen; Lücken bleiben offen.',['Monat','Kumulierte Sparüberweisungen'],pts.map(r=>[r.label,money(r.cumulative)])):`<p class="sx-number">${money(s.savings)}</p><p class="sx-muted">Für einen Verlauf mehrere Monate auswählen.</p>`)+
       card('Sparquote und Ziel','',pts.length>1?chartSlot('sx-savings-rate','Sparüberweisungsquote pro Monat und eingestelltes Ziel.',['Monat','Sparquote'],pts.map(r=>[r.label,r.savings_rate==null?'Nicht berechenbar':percent(r.savings_rate)])):`<p>${percent(s.savings_rate)}${data.goal==null?'':` · Ziel ${percent(data.goal)}`}</p>`);
@@ -327,6 +332,7 @@ const Stats = (() => {
     });
     $('page-stats').addEventListener('change',e=>{
       if(e.target.id==='sx-aggregation') {aggregation=e.target.value;render();}
+      if(e.target.id==='sx-overview-scale') {overviewScale=e.target.value;render();}
       if(e.target.id==='sx-perspective') {perspective=e.target.value;render();}
       if(e.target.id==='sx-compare') {compare=e.target.checked;render();}
       if(e.target.id==='sx-days') {days=Number(e.target.value);allUpcoming=false;load();}

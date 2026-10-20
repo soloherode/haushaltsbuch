@@ -833,13 +833,13 @@ th.sortable.desc::after { content: '↓'; opacity: .8; color: var(--lime); }
           <label class="sx-period-value"><span class="sx-sr-only">Zeitraum</span><span class="sx-select-wrap"><select id="sx-value"></select><svg aria-hidden="true"><use href="/static/statistics-icons.svg#chevron-down"></use></svg></span></label>
           <button type="button" id="sx-next" aria-label="Nächster Zeitraum" title="Nächster Zeitraum"><svg aria-hidden="true"><use href="/static/statistics-icons.svg#chevron-right"></use></svg></button>
         </div>
+        <span id="sx-range" class="sx-muted"></span>
+        <div class="sx-filter-row"><label class="toggle"><input type="checkbox" id="sx-nooutlier"> Ohne auffällige Buchungen</label><span id="sx-excluded" class="sx-muted"></span></div>
         <select id="stats-period" hidden aria-label="Gemeinsamer Zeitraum"></select>
       </div>
       <form id="sx-custom" class="sx-period-row" hidden>
         <label>Von<input type="date" id="sx-from" required></label><label>Bis<input type="date" id="sx-to" required></label><button>Anwenden</button>
       </form>
-      <p id="sx-range" class="sx-muted"></p>
-      <div class="sx-filter-row"><label class="toggle"><input type="checkbox" id="sx-nooutlier"> Ohne auffällige Buchungen</label><span id="sx-excluded" class="sx-muted"></span></div>
     </div>
     <nav class="sx-nav" aria-label="Statistikbereiche">
       <button data-section="overview" aria-current="page">Überblick</button><button data-section="expenses">Ausgaben</button><button data-section="savings">Sparen</button><button data-section="recurring">Regelmäßig</button>
