@@ -26,6 +26,7 @@ const Stats = (() => {
     'Netto in Sparanlagen überwiesen':['savings','teal'], 'Sparüberweisungsquote':['rate','lime'],
     'Zielquote':['target','blue'], 'Abstand zum Ziel':['trend','blue'],
     'Notwendig':['essential','teal'], 'Optional':['optional','orange'], 'Optional-Anteil':['rate','orange'],
+    'Fix':['fixed','red'], 'Variabel':['recurring','orange'],
     'Fixkosten / Monat':['fixed','red'], 'Variabel regelmäßig / Monat':['recurring','orange'],
     'Regelmäßige Einnahmen / Monat':['income','lime'], 'Sparpläne / Monat':['savings','teal']
   };
@@ -123,6 +124,10 @@ const Stats = (() => {
   function monthlyTable() {
     return table(['Monat','Einnahmen','Ausgaben','Sparüberweisungen','Verbleibend','Sparquote'],data.monthly.map(r=>[r.label,money(r.income),money(r.consumption),money(r.savings),money(r.balance),r.savings_rate==null?'—':percent(r.savings_rate)]));
   }
+  function expenseSplit(title, firstLabel, secondLabel, first, second, firstColor, secondColor, note, view) {
+    const total=first+second, share=total>0&&first>=0&&second>=0?first/total*100:null;
+    return card(title,note,`<div class="sx-split-values"><div><span class="sx-split-dot" style="background:${firstColor}"></span><span>${firstLabel}</span><strong>${money(first)}</strong></div><div><span class="sx-split-dot" style="background:${secondColor}"></span><span>${secondLabel}</span><strong>${money(second)}</strong></div></div>${share==null?'<p class="sx-muted">Anteile bei Nettoerstattungen nicht berechenbar.</p>':`<div class="sx-split-track" role="img" aria-label="${firstLabel}: ${percent(share)}; ${secondLabel}: ${percent(100-share)}"><span style="width:${share}%;background:${firstColor}"></span><span style="width:${100-share}%;background:${secondColor}"></span></div><div class="sx-split-percent"><span>${percent(share)}</span><span>${percent(100-share)}</span></div>`}<button class="sx-split-link" data-perspective-target="${view}">Verlauf ansehen <span aria-hidden="true">→</span></button>`);
+  }
   function renderOverview() {
     const s=data.summary, prev=canCompare()?data.previous:null;
     const insights=canCompare()?[...data.categories].filter(r=>r.diff!==0).sort((a,b)=>Math.abs(b.diff)-Math.abs(a.diff)).slice(0,3):[];
@@ -151,10 +156,15 @@ const Stats = (() => {
       body=card('Woher kommt die Veränderung?','',canCompare()&&changes.length?chartSlot('sx-changes-chart','Balken nach rechts: mehr Ausgaben. Nach links: weniger Ausgaben.',['Kategorie','Aktuell','Vorzeitraum','Veränderung'],changes.map(r=>[safe(r.category),money(r.total),money(r.previous),changed(r.diff)]))+`<div class="sx-list">${changes.slice(0,6).map(r=>categoryButton(r)).join('')}</div><details><summary>Statistische Details</summary><p class="sx-muted">Median, Durchschnitt und Trend basieren auf früheren Monaten. Ohne Vorwert keine Prozentänderung.</p>${table(['Kategorie','Änderung in %','Typischer Monat (Median)','Ø letzte 3 Monate','Trend / Monat'],changes.map(r=>[safe(r.category),r.pct==null?(r.total!==0?'neu / kein positiver Vorwert':'—'):percent(r.pct),money(r.median),money(r.moving_average),money(r.trend)]))}</details>`:empty('Kein Vergleich verfügbar.'));
     }
     if(perspective==='necessity') {
-      const n=data.necessity, total=n.essential+n.discretionary, multi=data.necessity_monthly.length>1;
-      body=card('Notwendig und optional','',`<div class="sx-kpis">${kpi('Notwendig',money(n.essential))}${kpi('Optional',money(n.discretionary))}${kpi('Optional-Anteil',total>0?percent(n.discretionary/total*100):'Nicht berechenbar')}</div>`+(data.count?chartSlot('sx-necessity-chart',multi?'Nettokonsum pro Monat, aufgeteilt nach Notwendigkeit.':'Nettokonsum des gewählten Zeitraums.',['Zeitraum','Notwendig','Optional'],(multi?data.necessity_monthly:[{label:data.period.label,...n}]).map(r=>[safe(r.label),money(r.essential),money(r.discretionary)])):empty('Keine Buchungen vorhanden.')));
+      const n=data.necessity, multi=data.necessity_monthly.length>1;
+      body=card('Notwendig und optional','',data.count?chartSlot('sx-necessity-chart',multi?'Nettokonsum pro Monat, aufgeteilt nach Notwendigkeit.':'Nettokonsum des gewählten Zeitraums.',['Zeitraum','Notwendig','Optional'],(multi?data.necessity_monthly:[{label:data.period.label,...n}]).map(r=>[safe(r.label),money(r.essential),money(r.discretionary)])):empty('Keine Buchungen vorhanden.'));
     }
-    $('sx-content').innerHTML=comparisonControl()+`<div class="sx-toolbar"><div><p class="sx-muted">Ausgaben im Zeitraum</p><h2>${money(data.summary.consumption)}</h2></div><label>Perspektive<select id="sx-perspective" aria-label="Perspektive"><option value="categories">Kategorien</option><option value="necessity">Notwendig / Optional</option><option value="changes">Veränderungen</option></select></label></div>`+body+
+    if(perspective==='structure') {
+      const n=data.expense_structure, multi=data.expense_structure_monthly.length>1;
+      body=card('Fix und variabel','',data.count?chartSlot('sx-structure-chart',multi?'Gebuchter Nettokonsum pro Monat, aufgeteilt in fix und variabel.':'Gebuchter Nettokonsum des gewählten Zeitraums.',['Zeitraum','Fix','Variabel'],(multi?data.expense_structure_monthly:[{label:data.period.label,...n}]).map(r=>[safe(r.label),money(r.fixed),money(r.variable)])):empty('Keine Buchungen vorhanden.'));
+    }
+    const n=data.necessity, structure=data.expense_structure;
+    $('sx-content').innerHTML=comparisonControl()+`<div class="sx-toolbar"><div><p class="sx-muted">Ausgaben im Zeitraum</p><h2>${money(data.summary.consumption)}</h2></div><label>Perspektive<select id="sx-perspective" aria-label="Perspektive"><option value="categories">Kategorien</option><option value="structure">Fix / Variabel</option><option value="necessity">Notwendig / Optional</option><option value="changes">Veränderungen</option></select></label></div><div class="sx-grid sx-expense-splits">${expenseSplit('Fix / Variabel','Fix','Variabel',structure.fixed,structure.variable,'#2563eb','#f97316','Gebuchte Konsumausgaben · erkannte Fixserien','structure')}${expenseSplit('Notwendig / Optional','Notwendig','Optional',n.essential,n.discretionary,'#0d9488','#f97316','Gebuchter Konsum nach Kategorie','necessity')}</div>`+body+
       card('Auffällige Buchungen',`${data.outliers.length} auffällige Kategorie-Buchungen · ${$('sx-nooutlier').checked?'ausgeblendet':'enthalten'}`,data.outliers.length?data.outliers.slice(0,5).map(r=>`<button class="sx-insight" data-category="${key(r.category)}"><strong>${safe(r.merchant_name||r.category)} · ${money(-r.amount)}</strong><br><span class="sx-muted">${dateLabel(r.date)} · ${safe(r.category)} · ${number(r.factor)}× der Erkennungsschwelle von ${money(r.threshold)}</span></button>`).join('')+`<details><summary>Alle Fälle & Erkennung</summary><p class="sx-muted">Die Erkennungsschwelle beträgt mindestens 100 € und basiert auf dem vierfachen typischen Einzelbetrag der Kategorie. Regelmäßige Händler bleiben außen vor. „1× der Schwelle“ bedeutet nicht „1× des typischen Betrags“.</p>${table(['Datum','Kategorie','Betrag','Erkennungsschwelle'],data.outliers.map(r=>[dateLabel(r.date),safe(r.category),money(-r.amount),money(r.threshold)]))}</details>`:empty('Keine auffälligen Buchungen gefunden.'));
     $('sx-perspective').value=perspective;
     if(perspective==='changes'&&canCompare()) {
@@ -164,6 +174,10 @@ const Stats = (() => {
     if(perspective==='necessity'&&data.count) {
       const multi=data.necessity_monthly.length>1, points=multi?data.necessity_monthly:[{label:data.period.label,...data.necessity}];
       draw('sx-necessity-chart',points.map(r=>r.label),[{label:'Notwendig',data:points.map(r=>r.essential),backgroundColor:'#0d9488'},{label:'Optional',data:points.map(r=>r.discretionary),backgroundColor:'#f97316'}],{stacked:true,horizontal:!multi});
+    }
+    if(perspective==='structure'&&data.count) {
+      const multi=data.expense_structure_monthly.length>1, points=multi?data.expense_structure_monthly:[{label:data.period.label,...data.expense_structure}];
+      draw('sx-structure-chart',points.map(r=>r.label),[{label:'Fix',data:points.map(r=>r.fixed),backgroundColor:'#2563eb'},{label:'Variabel',data:points.map(r=>r.variable),backgroundColor:'#f97316'}],{stacked:true,horizontal:!multi});
     }
   }
   function renderSavings() {
@@ -212,6 +226,7 @@ const Stats = (() => {
     const focused=document.activeElement;
     const restoreId=$('sx-content').contains(focused)?focused.id:null;
     const restoreAction=$('sx-content').contains(focused)?focused.dataset.action:null;
+    const restorePerspective=$('sx-content').contains(focused)?focused.dataset.perspectiveTarget:null;
     destroyCharts();
     $('sx-status').innerHTML=section==='recurring'&&recurringMode==='current'?'':qualityHTML();
     $('sx-range').textContent=rangeLabel(data.period)+(data.selection.end!==data.period.end?' · bis heute':'')+(/^r\d+$/.test(currentPeriod)?' · Ende am neuesten Datenmonat':'')+(months[0]&&months[0]<data.today.slice(0,7)?' · Neuester Datenmonat: '+months[0]:'');
@@ -223,6 +238,7 @@ const Stats = (() => {
     if(section==='recurring') renderRecurring();
     if(restoreId) $(restoreId)?.focus({preventScroll:true});
     else if(restoreAction) document.querySelector(`#sx-content [data-action="${restoreAction}"]`)?.focus({preventScroll:true});
+    else if(restorePerspective) document.querySelector(`#sx-content [data-perspective-target="${restorePerspective}"]`)?.focus({preventScroll:true});
   }
   function syncControls() {
     const value=periodOf('stats-period');
@@ -328,6 +344,7 @@ const Stats = (() => {
       if(b.dataset.action==='categories') {allCategories=!allCategories; render();}
       if(b.dataset.action==='upcoming') {allUpcoming=!allUpcoming; render();}
       if(b.dataset.action==='retry') load();
+      if(b.dataset.perspectiveTarget) {perspective=b.dataset.perspectiveTarget;render();}
       if(b.dataset.recurringAction) recurringActionClick(b);
     });
     $('page-stats').addEventListener('change',e=>{

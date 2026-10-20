@@ -91,9 +91,23 @@ class StatisticsExplorerTests(unittest.TestCase):
         self.assertEqual(v['categories'][0]['total'],160)
         self.assertEqual(v['detail']['total'],160)
         self.assertEqual(v['necessity']['discretionary'],160)
+        self.assertEqual(v['expense_structure'],{'fixed':0,'variable':160})
         self.assertEqual(-sum(r['amount'] for r in v['bookings']),160)
         self.assertEqual(sum(r['consumption'] for r in v['series']),160)
         self.assertEqual(v['monthly'][0]['consumption'],160)
+
+    def test_fixed_and_variable_booked_expenses_follow_recurring_type(self):
+        for month in ('06','07','08'):
+            self.tx(f'2026-{month}-03',-100,'Wohnen & Nebenkosten',merchant='Miete')
+        self.tx('2026-08-12',-40,'Einkaufen',merchant='Laden')
+        v=self.view()
+        self.assertEqual(v['summary']['consumption'],140)
+        self.assertEqual(v['expense_structure'],{'fixed':100,'variable':40})
+        self.assertEqual(v['necessity'],{'essential':100,'discretionary':40})
+        self.assertEqual(v['expense_structure_monthly'][0]['fixed'],100)
+        self.conn.execute("INSERT INTO merchant_overrides (merchant_name,category,recurring_type) VALUES ('Miete','Wohnen & Nebenkosten','variabel')")
+        self.conn.commit()
+        self.assertEqual(self.view()['expense_structure'],{'fixed':0,'variable':140})
 
     def test_month_gaps_unknown_and_zero_income_rate_missing(self):
         self.tx('2026-06-01',-10)
@@ -102,6 +116,7 @@ class StatisticsExplorerTests(unittest.TestCase):
         self.assertEqual(v['monthly'][1]['label'],'2026-07')
         self.assertIsNone(v['monthly'][1]['consumption'])
         self.assertIsNone(v['monthly'][1]['cumulative'])
+        self.assertEqual(v['expense_structure_monthly'][1],{'label':'2026-07','fixed':None,'variable':None})
         self.assertIsNone(v['summary']['savings_rate'])
         self.assertIsNone(v['monthly'][0]['savings_rate'])
         self.assertEqual(v['monthly'][2]['cumulative'],0)

@@ -52,7 +52,7 @@ def coverage(conn, p):
 
 
 def build(conn, p, *, exclude_outliers=False, category=None, today=None, include_bookings=False):
-    from app.main import TX, KIND, NECESSITY, _outlier_context, _is_outlier, _period_info
+    from app.main import TX, KIND, NECESSITY, _outlier_context, _is_outlier, _period_info, _recurring_items
     today = today or date.today()
     current, previous = comparison_period(p, today)
     rows = [dict(r) for r in conn.execute(f"""SELECT t.id,t.date,t.amount,t.category,t.merchant_name,
@@ -144,6 +144,17 @@ def build(conn, p, *, exclude_outliers=False, category=None, today=None, include
         necessity_monthly.append({'label': m['label'], **{
             k: round(-sum(r['amount'] for r in rr if r['kind']=='consumption' and r['necessity']==k),2)
             if m['consumption'] is not None else None for k in necessity}})
+    fixed_keys = {(r['source'], r['account_name'], r['merchant_name'], r['category'])
+                  for r in _recurring_items(conn, as_of=today.isoformat())
+                  if r['kind']=='consumption' and r['type']=='fix' and not r['excluded']}
+    def expense_structure(rr):
+        fixed = round(-sum(r['amount'] for r in rr if r['kind']=='consumption' and
+                           (r['source'], r['account_name'], r['merchant_name'], r['category']) in fixed_keys), 2)
+        total = totals(rr)['consumption']
+        return {'fixed': fixed, 'variable': round(total-fixed, 2)}
+    structure = expense_structure(active)
+    structure_monthly = [{'label': m['label'], **(expense_structure(month_groups.get(m['label'], []))
+                         if m['consumption'] is not None else {'fixed': None, 'variable': None})} for m in monthly]
     outliers = [{**r, 'threshold': thresholds[r['category']],
                  'factor': round(abs(r['amount']) / thresholds[r['category']], 1)} for r in selected if r['outlier']]
     outliers.sort(key=lambda r: abs(r['amount']), reverse=True)
@@ -171,6 +182,7 @@ def build(conn, p, *, exclude_outliers=False, category=None, today=None, include
             'count': len({r['id'] for r in active}), 'series': series,
             'granularity': 'day' if single_month else 'month', 'monthly': monthly, 'quarterly': quarterly,
             'categories': categories, 'necessity': necessity, 'necessity_monthly': necessity_monthly,
+            'expense_structure': structure, 'expense_structure_monthly': structure_monthly,
             'income_categories': [{'category': k, 'total': round(sum(r['amount'] for r in rr), 2)}
                 for k, rr in grouped([r for r in active if r['kind']=='income'], lambda r:r['category']).items()],
             'outliers': outliers, 'excluded_count': len(outliers) if exclude_outliers else 0,

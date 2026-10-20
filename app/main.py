@@ -60,7 +60,10 @@ PUBLIC_PREFIXES = ("/static/",)
 async def require_login(request: Request, call_next):
     path = request.url.path
     if path in PUBLIC_PATHS or path.startswith(PUBLIC_PREFIXES):
-        return await call_next(request)
+        response = await call_next(request)
+        if path in ('/static/statistics.js', '/static/statistics.css'):
+            response.headers['Cache-Control'] = 'no-cache'
+        return response
 
     token = request.cookies.get(auth.COOKIE_NAME)
     # sqlite blockiert – nicht im Event-Loop ausführen.
@@ -178,7 +181,7 @@ def auth_change_password(body: dict, response: Response):
 
 @app.get("/", response_class=HTMLResponse)
 def root():
-    return _page("index.html")
+    return HTMLResponse(_page("index.html"), headers={'Cache-Control': 'no-cache'})
 
 
 # ─── Helpers ───────────────────────────────────────────────────────────────────
