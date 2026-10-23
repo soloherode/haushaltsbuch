@@ -155,15 +155,16 @@ def build(conn, p, *, exclude_outliers=False, category=None, today=None, include
     structure = expense_structure(active)
     structure_monthly = [{'label': m['label'], **(expense_structure(month_groups.get(m['label'], []))
                          if m['consumption'] is not None else {'fixed': None, 'variable': None})} for m in monthly]
-    observed_months = [i for i, m in enumerate(monthly) if m['consumption'] is not None]
+    average_months = periods.months_between(monthly[0]['label'], monthly[-1]['label']) if monthly else 0
     expense_monthly_average = None
-    if len(observed_months) >= 3:
-        count = len(observed_months)
+    if average_months > 1 and len(monthly) == average_months and all(m['consumption'] is not None for m in monthly):
+        count = average_months
         expense_monthly_average = {'months': count,
             'partial': bool(current.bounded and
                             (date.fromisoformat(current.start).day != 1 or
                              date.fromisoformat(current.end).day != 1)),
-            **{key: round(sum(values[i][key] for i in observed_months) / count, 2)
+            'total': round(sum(m['consumption'] for m in monthly) / count, 2),
+            **{key: round(sum(m[key] for m in values) / count, 2)
                for values, keys in ((structure_monthly, ('fixed', 'variable')),
                                     (necessity_monthly, ('essential', 'discretionary')))
                for key in keys}}
@@ -196,6 +197,7 @@ def build(conn, p, *, exclude_outliers=False, category=None, today=None, include
             'categories': categories, 'necessity': necessity, 'necessity_monthly': necessity_monthly,
             'expense_structure': structure, 'expense_structure_monthly': structure_monthly,
             'expense_monthly_average': expense_monthly_average,
+            'expense_average_months': average_months,
             'income_categories': [{'category': k, 'total': round(sum(r['amount'] for r in rr), 2)}
                 for k, rr in grouped([r for r in active if r['kind']=='income'], lambda r:r['category']).items()],
             'outliers': outliers, 'excluded_count': len(outliers) if exclude_outliers else 0,

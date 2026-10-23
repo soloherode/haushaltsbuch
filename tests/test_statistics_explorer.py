@@ -105,8 +105,13 @@ class StatisticsExplorerTests(unittest.TestCase):
         self.assertEqual(v['expense_structure'],{'fixed':100,'variable':40})
         self.assertEqual(v['necessity'],{'essential':100,'discretionary':40})
         self.assertEqual(v['expense_structure_monthly'][0]['fixed'],100)
+        two_months=self.view('2026-06-01..2026-07-31')
+        self.assertEqual(two_months['expense_average_months'],2)
+        self.assertEqual(two_months['expense_monthly_average'],{
+            'months':2,'partial':False,'total':100,'fixed':100,'variable':0,
+            'essential':100,'discretionary':0})
         average=self.view('2026-06-01..2026-08-31')['expense_monthly_average']
-        self.assertEqual(average,{'months':3,'partial':False,'fixed':100,'variable':13.33,
+        self.assertEqual(average,{'months':3,'partial':False,'total':113.33,'fixed':100,'variable':13.33,
                                   'essential':100,'discretionary':13.33})
         self.assertTrue(self.view('2026-06-01..2026-08-15')['expense_monthly_average']['partial'])
         self.conn.execute("INSERT INTO merchant_overrides (merchant_name,category,recurring_type) VALUES ('Miete','Wohnen & Nebenkosten','variabel')")
@@ -121,10 +126,21 @@ class StatisticsExplorerTests(unittest.TestCase):
         self.assertIsNone(v['monthly'][1]['consumption'])
         self.assertIsNone(v['monthly'][1]['cumulative'])
         self.assertEqual(v['expense_structure_monthly'][1],{'label':'2026-07','fixed':None,'variable':None})
+        self.assertEqual(v['expense_average_months'],3)
         self.assertIsNone(v['expense_monthly_average'])
         self.assertIsNone(v['summary']['savings_rate'])
         self.assertIsNone(v['monthly'][0]['savings_rate'])
         self.assertEqual(v['monthly'][2]['cumulative'],0)
+
+    def test_confirmed_zero_month_counts_in_selected_period_average(self):
+        self.tx('2026-06-03',-60)
+        self.conn.execute("INSERT INTO import_coverage VALUES ('test','Giro','2026-07-01','2026-07-31')")
+        self.conn.commit()
+        v=self.view('2026-06-01..2026-07-31')
+        self.assertEqual(v['monthly'][1]['consumption'],0)
+        self.assertEqual(v['expense_monthly_average']['months'],2)
+        self.assertEqual(v['expense_monthly_average']['total'],30)
+        self.assertEqual(v['expense_monthly_average']['variable'],30)
 
     def test_coverage_requires_union_for_every_account(self):
         self.tx('2026-08-03',-10)
